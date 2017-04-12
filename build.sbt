@@ -234,7 +234,15 @@ lazy val packagingSettings = Seq(
   packageDescription := "Cluster-wide init and control system for services running on\\\n\tApache Mesos",
   maintainer := "Mesosphere Package Builder <support@mesosphere.io>",
   linuxPackageMappings +=
-    packageMapping(baseDirectory.value / "packaging" / "marathon.service" -> "/usr/lib/systemd/system/marathon.service"),
+    packageMapping(baseDirectory.value / "packaging" / "marathon.service" -> "/usr/lib/systemd/system/marathon.service",
+      baseDirectory.value / "packaging" / "marathon.conf" -> "/etc/init/marathon.conf",
+      baseDirectory.value / "packaging" / "marathon.init" -> "/etc/init.d/marathon"),
+  debianPackageDependencies in Debian := (debianPackageDependencies in Debian).value ++ Seq("java8-runtime-headless", "lsb-release", "unzip"),
+  changelog in Debian := Some(baseDirectory.value / "changelog.md"),
+  maintainerScripts in Debian := maintainerScriptsAppend((maintainerScripts in Debian).value)(
+    Preinst -> IO.read(baseDirectory.value / "packaging" / "marathon.postinst"),
+    Postinst -> IO.read(baseDirectory.value / "packaging" / "marathon.postrm")
+  ),
   dockerBaseImage in Docker := "openjdk:8u121-jdk",
   dockerExposedPorts in Docker := Seq(8080),
   dockerRepository in Docker := Some("mesosphere"),
