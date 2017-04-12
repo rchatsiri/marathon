@@ -230,6 +230,11 @@ lazy val asmSettings = Seq(
 )
 
 lazy val packagingSettings = Seq(
+  packageSummary := "Marathon Scheduler for Mesos",
+  packageDescription := "Cluster-wide init and control system for services running on\\\n\tApache Mesos",
+  maintainer := "Mesosphere Package Builder <support@mesosphere.io>",
+  linuxPackageMappings +=
+    packageMapping(baseDirectory.value / "packaging" / "marathon.service" -> "/usr/lib/systemd/system/marathon.service"),
   dockerBaseImage in Docker := "openjdk:8u121-jdk",
   dockerExposedPorts in Docker := Seq(8080),
   dockerRepository in Docker := Some("mesosphere"),
@@ -261,7 +266,7 @@ lazy val marathon = (project in file("."))
   .configs(IntegrationTest)
   .configs(UnstableTest)
   .configs(UnstableIntegrationTest)
-  .enablePlugins(GitBranchPrompt, JavaServerAppPackaging, DockerPlugin,
+  .enablePlugins(GitBranchPrompt, JavaServerAppPackaging, DockerPlugin, DebianPlugin, RpmPlugin, JDKPackagerPlugin,
     CopyPasteDetector, RamlGeneratorPlugin, BasicLintingPlugin, GitVersioning)
   .dependsOn(`plugin-interface`)
   .settings(commonSettings: _*)
