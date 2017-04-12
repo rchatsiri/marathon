@@ -179,70 +179,26 @@ lazy val commonSettings = inConfig(SerialIntegrationTest)(Defaults.testTasks) ++
   javaOptions in run ++= (AspectjKeys.weaverOptions in Aspectj).value,
   javaOptions in Test ++= (AspectjKeys.weaverOptions in Aspectj).value,
   git.useGitDescribe := true,
-  // TODO: There appears to be a bug where uncommitted changes is true even if nothing is committed. 
+  // TODO: There appears to be a bug where uncommitted changes is true even if nothing is committed.
   git.uncommittedSignifier := None
 )
 
-val aopMerge: sbtassembly.MergeStrategy = new sbtassembly.MergeStrategy {
-  val name = "aopMerge"
-  import scala.xml._
-  import scala.xml.dtd._
 
-  def apply(tempDir: File, path: String, files: Seq[File]): Either[String, Seq[(File, String)]] = {
-    val dt = DocType("aspectj", PublicID("-//AspectJ//DTD//EN", "http://www.eclipse.org/aspectj/dtd/aspectj.dtd"), Nil)
-    val file = MergeStrategy.createMergeTarget(tempDir, path)
-    val xmls: Seq[Elem] = files.map(XML.loadFile)
-    val aspectsChildren: Seq[Node] = xmls.flatMap(_ \\ "aspectj" \ "aspects" \ "_")
-    val weaverChildren: Seq[Node] = xmls.flatMap(_ \\ "aspectj" \ "weaver" \ "_")
-    val options: String = xmls.map(x => (x \\ "aspectj" \ "weaver" \ "@options").text).mkString(" ").trim
-    val weaverAttr = if (options.isEmpty) Null else new UnprefixedAttribute("options", options, Null)
-    val aspects = new Elem(null, "aspects", Null, TopScope, false, aspectsChildren: _*)
-    val weaver = new Elem(null, "weaver", weaverAttr, TopScope, false, weaverChildren: _*)
-    val aspectj = new Elem(null, "aspectj", Null, TopScope, false, aspects, weaver)
-    XML.save(file.toString, aspectj, "UTF-8", xmlDecl = false, dt)
-    IO.append(file, IO.Newline.getBytes(IO.defaultCharset))
-    Right(Seq(file -> path))
-  }
-}
-
-// TODO: Move away from sbt-assembly, favoring sbt-native-packager
-lazy val asmSettings = Seq(
-  assemblyMergeStrategy in assembly := {
-    case "application.conf" => MergeStrategy.concat
-    case "META-INF/jersey-module-version" => MergeStrategy.first
-    case "META-INF/aop.xml" => aopMerge
-    case "org/apache/hadoop/yarn/util/package-info.class" => MergeStrategy.first
-    case "org/apache/hadoop/yarn/factories/package-info.class" => MergeStrategy.first
-    case "org/apache/hadoop/yarn/factory/providers/package-info.class" => MergeStrategy.first
-    case x => (assemblyMergeStrategy in assembly).value(x)
-  },
-  assemblyExcludedJars in assembly := {
-    val exclude = Set(
-      "commons-beanutils-1.7.0.jar",
-      "stax-api-1.0.1.jar",
-      "commons-beanutils-core-1.8.0.jar",
-      "servlet-api-2.5.jar",
-      "jsp-api-2.1.jar"
-    )
-    (fullClasspath in assembly).value.filter { x => exclude(x.data.getName) }
-  },
-  test in assembly := {}
-)
+lazy val packageDebianUpstart = taskKey[File]("Create debian upstart package")
+lazy val packageDebianSystemV = taskKey[File]("Create debian systemv package")
+lazy val packageDebianSystemd = taskKey[File]("Create debian systemd package")
+lazy val packageRpmSystemV = taskKey[File]("Create rpm systemv package")
+lazy val packageRpmSystemd = taskKey[File]("create rpm systemd package")
 
 lazy val packagingSettings = Seq(
-  packageSummary := "Marathon Scheduler for Mesos",
+  packageSummary := "Scheduler for Apache Mesos",
   packageDescription := "Cluster-wide init and control system for services running on\\\n\tApache Mesos",
   maintainer := "Mesosphere Package Builder <support@mesosphere.io>",
-  linuxPackageMappings +=
-    packageMapping(baseDirectory.value / "packaging" / "marathon.service" -> "/usr/lib/systemd/system/marathon.service",
-      baseDirectory.value / "packaging" / "marathon.conf" -> "/etc/init/marathon.conf",
-      baseDirectory.value / "packaging" / "marathon.init" -> "/etc/init.d/marathon"),
-  debianPackageDependencies in Debian := (debianPackageDependencies in Debian).value ++ Seq("java8-runtime-headless", "lsb-release", "unzip"),
-  changelog in Debian := Some(baseDirectory.value / "changelog.md"),
-  maintainerScripts in Debian := maintainerScriptsAppend((maintainerScripts in Debian).value)(
-    Preinst -> IO.read(baseDirectory.value / "packaging" / "marathon.postinst"),
-    Postinst -> IO.read(baseDirectory.value / "packaging" / "marathon.postrm")
-  ),
+  debianPackageDependencies in Debian := Seq("java8-runtime-headless", "lsb-release", "unzip", s"mesos (>= ${Dependency.V.MesosDebian})"),
+  rpmVendor := "Mesosphere, Inc.",
+  rpmLicense := Some("Apache 2"),
+  daemonStdoutLogFile := None,
+  debianChangelog in Debian := Some(baseDirectory.value / "changelog.md"),
   dockerBaseImage in Docker := "openjdk:8u121-jdk",
   dockerExposedPorts in Docker := Seq(8080),
   dockerRepository in Docker := Some("mesosphere"),
@@ -253,8 +209,58 @@ lazy val packagingSettings = Seq(
     "apt-get update && \\" +
     s"apt-get install --no-install-recommends -y --force-yes mesos=${Dependency.V.MesosDebian} && \\" +
     "apt-get clean")
-  )
+  ),
+  packageDebianUpstart := {
+    val debianFile = (packageBin in Debian).value
+    val output = target.value / "packages" / s"upstart-${debianFile.getName}"
+    IO.move(debianFile, output)
+    streams.value.log.info(s"Moved debian ${(serverLoading in Debian).value.get} package ${debianFile} to $output")
+    output
+  },
+  packageDebianSystemV := {
+    val debianFile = (packageBin in Debian).value
+    val output = target.value / "packages" /  s"systemv-${debianFile.getName}"
+    IO.move(debianFile, output)
+    streams.value.log.info(s"Moved debian ${(serverLoading in Debian).value.get} package ${debianFile} to $output")
+    output
+  },
+  packageDebianSystemd := {
+    val debianFile = (packageBin in Debian).value
+    val output = target.value / "packages" /  s"systemd-${debianFile.getName}"
+    IO.move(debianFile, output)
+    streams.value.log.info(s"Moving debian ${(serverLoading in Debian).value.get} package ${debianFile} to $output")
+    output
+  },
+  packageRpmSystemV := {
+    val rpmFile = (packageBin in Rpm).value
+    val output = target.value / "packages" /  s"systemv-${rpmFile.getName}"
+    IO.move(rpmFile, output)
+    streams.value.log.info(s"Moving rpm ${(serverLoading in Rpm).value.get} package ${rpmFile} to $output")
+    output
+  },
+  packageRpmSystemd := {
+    val rpmFile = (packageBin in Rpm).value
+    val output = target.value / "packages" /  s"systemd-${rpmFile.getName}"
+    IO.move(rpmFile, output)
+    streams.value.log.info(s"Moving rpm ${(serverLoading in Rpm).value.get} package ${rpmFile} to $output")
+    output
+  }
 )
+
+addCommandAlias("packageAll", ";packageDebian; packageRpm")
+
+addCommandAlias("packageDebian",  ";set serverLoading in Debian := Some(com.typesafe.sbt.packager.archetypes.systemloader.ServerLoader.SystemV)" +
+  ";packageDebianSystemV" +
+  ";set serverLoading in Debian := Some(com.typesafe.sbt.packager.archetypes.systemloader.ServerLoader.Upstart)" +
+  ";packageDebianUpstart" +
+  ";set serverLoading in Debian := Some(com.typesafe.sbt.packager.archetypes.systemloader.ServerLoader.Systemd)" +
+  ";packageDebianSystemd")
+
+addCommandAlias("packageRpm",  ";set serverLoading in Rpm := Some(com.typesafe.sbt.packager.archetypes.systemloader.ServerLoader.SystemV)" +
+  ";packageRpmSystemV" +
+  ";set serverLoading in Rpm := Some(com.typesafe.sbt.packager.archetypes.systemloader.ServerLoader.Systemd)" +
+  ";packageRpmSystemd")
+
 
 lazy val `plugin-interface` = (project in file("plugin-interface"))
     .enablePlugins(GitBranchPrompt, CopyPasteDetector, BasicLintingPlugin)
@@ -274,13 +280,14 @@ lazy val marathon = (project in file("."))
   .configs(IntegrationTest)
   .configs(UnstableTest)
   .configs(UnstableIntegrationTest)
-  .enablePlugins(GitBranchPrompt, JavaServerAppPackaging, DockerPlugin, DebianPlugin, RpmPlugin, JDKPackagerPlugin,
+  .enablePlugins(GitBranchPrompt, JavaServerAppPackaging, DockerPlugin, DebianPlugin, RpmPlugin, JDebPackaging,
+    SystemVPlugin, SystemdPlugin, UpstartPlugin,
     CopyPasteDetector, RamlGeneratorPlugin, BasicLintingPlugin, GitVersioning)
   .dependsOn(`plugin-interface`)
   .settings(commonSettings: _*)
   .settings(formatSettings: _*)
+  .settings(packagingSettings: _*)
   .settings(teamCitySetEnvSettings: _*)
-  .settings(asmSettings: _*)
   .settings(
     unmanagedResourceDirectories in Compile += file("docs/docs/rest-api"),
     libraryDependencies ++= Dependencies.marathon,
@@ -293,6 +300,7 @@ lazy val marathon = (project in file("."))
       Package.ManifestAttributes("Git-Commit" -> git.gitHeadCommit.value.getOrElse("unknown") )
     )
   )
+
 
 lazy val `mesos-simulation` = (project in file("mesos-simulation"))
   .configs(SerialIntegrationTest)

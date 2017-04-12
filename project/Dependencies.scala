@@ -13,9 +13,9 @@ object Dependencies {
   )
 
   val excludeSlf4jLog4j12 = ExclusionRule(organization = "org.slf4j", name = "slf4j-log4j12")
-  val excludeLog4j = ExclusionRule(organization = "log4j")
-  val excludeJCL = ExclusionRule(organization = "commons-logging")
-  val excludeAkkaHttpExperimental = ExclusionRule(name = "akka-http-experimental_2.11")
+  val excludeLog4j = ExclusionRule(organization = "log4j", name = "log4j")
+  val excludeJCL = ExclusionRule(organization = "commons-logging", name = "commons-logging")
+  val excludeAkkaHttpExperimental = ExclusionRule(organization = "com.typesafe.akka", name = "akka-http-experimental_2.11")
 
   val marathon = (Seq(
     // runtime
