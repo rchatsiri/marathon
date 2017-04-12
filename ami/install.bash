@@ -24,6 +24,8 @@ echo "deb http://repos.mesosphere.com/debian jessie main" | tee -a /etc/apt/sour
 
 apt-get -y update
 
+apt install -t jessie-backports -y openjdk-8-jdk
+
 # Install dependencies
 apt-get install -y \
     git \
@@ -35,16 +37,15 @@ apt-get install -y \
     build-essential \
     rpm \
     ruby \
-    ruby-dev
-
-apt install -t jessie-backports -y openjdk-8-jdk
+    ruby-dev \
+    npm
 
 # Install fpm which is used for deb and rpm packaging.
 gem install fpm
 
 # Download (but don't install) Mesos and its dependencies.
 # The CI task will install Mesos later.
-apt-get install -y -d mesos
+apt-get install -y --force-yes --no-install-recommends mesos=$MESOS_VERSION
 
 # Add arcanist
 mkdir -p /opt/arcanist
@@ -54,6 +55,10 @@ ln -sf /opt/arcanist/arcanist/bin/arc /usr/local/bin/
 
 # Add user to docker group
 gpasswd -a admin docker
+
+# Nodejs: add the NodeSource APT repository for Debian-based distributions repository AND the PGP key for verifying packages
+curl -sL https://deb.nodesource.com/setup_6.x | bash -
+apt-get install -y nodejs
 
 # Setup system
 systemctl enable docker
@@ -66,5 +71,8 @@ curl -o /usr/bin/jq https://github.com/stedolan/jq/releases/download/jq-1.5/jq-l
 
 # Warmup ivy2 cache
 git clone https://github.com/mesosphere/marathon.git /home/admin/marathon
-su - admin -c "cd /home/admin/marathon && sbt update"
+cd /home/admin/marathon
+# Otherwise JVM will not start even on medium instances
+export SBT_OPTS="-Xmx2G -Xms128M"
+sbt update
 rm -rf /home/admin/marathon
