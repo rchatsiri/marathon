@@ -1,3 +1,7 @@
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
+import java.time.LocalDate
+
 import com.amazonaws.auth.{EnvironmentVariableCredentialsProvider, InstanceProfileCredentialsProvider}
 import com.typesafe.sbt.SbtScalariform.ScalariformKeys
 import com.typesafe.sbt.packager.docker.ExecCmd
@@ -195,10 +199,19 @@ lazy val packagingSettings = Seq(
   packageDescription := "Cluster-wide init and control system for services running on\\\n\tApache Mesos",
   maintainer := "Mesosphere Package Builder <support@mesosphere.io>",
   debianPackageDependencies in Debian := Seq("java8-runtime-headless", "lsb-release", "unzip", s"mesos (>= ${Dependency.V.MesosDebian})"),
-  rpmVendor := "Mesosphere, Inc.",
+  rpmVendor := "mesosphere",
   rpmLicense := Some("Apache 2"),
+  version in Rpm := {
+    val releasePattern = """^(\d+)\.(\d+)\.(\d+)$""".r
+    val snapshotPattern = """^(\d+).(\d+)\.(\d+)-SNAPSHOT-\d+-g(\w+)""".r
+    version.value match {
+      case releasePattern(major, minor, patch) => s"$major.$minor.$patch"
+      case snapshotPattern(major, minor, patch, commit) => s"$major.$minor.$patch${LocalDate.now(ZoneOffset.UTC).format(DateTimeFormatter.BASIC_ISO_DATE)}git$commit"
+    }
+  },
   daemonStdoutLogFile := None,
   debianChangelog in Debian := Some(baseDirectory.value / "changelog.md"),
+  rpmRequirements in Rpm := Seq("coreutils", "unzip", "java >= 1:1.8.0"),
   dockerBaseImage in Docker := "openjdk:8u121-jdk",
   dockerExposedPorts in Docker := Seq(8080),
   dockerRepository in Docker := Some("mesosphere"),
@@ -210,55 +223,62 @@ lazy val packagingSettings = Seq(
     s"apt-get install --no-install-recommends -y --force-yes mesos=${Dependency.V.MesosDebian} && \\" +
     "apt-get clean")
   ),
+  bashScriptExtraDefines +=
+    """
+      |for env_op in `env | grep -v ^MARATHON_APP | grep ^MARATHON_ | awk '{gsub(/MARATHON_/,""); gsub(/=/," "); printf("%s%s ", "--", tolower($1)); for(i=2;i<=NF;i++){printf("%s ", $i)}}'`; do
+      |  addApp "$env_op"
+      |done
+      |
+    """.stripMargin,
   packageDebianUpstart := {
     val debianFile = (packageBin in Debian).value
     val output = target.value / "packages" / s"upstart-${debianFile.getName}"
     IO.move(debianFile, output)
-    streams.value.log.info(s"Moved debian ${(serverLoading in Debian).value.get} package ${debianFile} to $output")
+    streams.value.log.info(s"Moved debian ${(serverLoading in Debian).value} package ${debianFile} to $output")
     output
   },
   packageDebianSystemV := {
     val debianFile = (packageBin in Debian).value
     val output = target.value / "packages" /  s"systemv-${debianFile.getName}"
     IO.move(debianFile, output)
-    streams.value.log.info(s"Moved debian ${(serverLoading in Debian).value.get} package ${debianFile} to $output")
+    streams.value.log.info(s"Moved debian ${(serverLoading in Debian).value} package ${debianFile} to $output")
     output
   },
   packageDebianSystemd := {
     val debianFile = (packageBin in Debian).value
     val output = target.value / "packages" /  s"systemd-${debianFile.getName}"
     IO.move(debianFile, output)
-    streams.value.log.info(s"Moving debian ${(serverLoading in Debian).value.get} package ${debianFile} to $output")
+    streams.value.log.info(s"Moving debian ${(serverLoading in Debian).value} package ${debianFile} to $output")
     output
   },
   packageRpmSystemV := {
     val rpmFile = (packageBin in Rpm).value
     val output = target.value / "packages" /  s"systemv-${rpmFile.getName}"
     IO.move(rpmFile, output)
-    streams.value.log.info(s"Moving rpm ${(serverLoading in Rpm).value.get} package ${rpmFile} to $output")
+    streams.value.log.info(s"Moving rpm ${(serverLoading in Rpm).value} package ${rpmFile} to $output")
     output
   },
   packageRpmSystemd := {
     val rpmFile = (packageBin in Rpm).value
     val output = target.value / "packages" /  s"systemd-${rpmFile.getName}"
     IO.move(rpmFile, output)
-    streams.value.log.info(s"Moving rpm ${(serverLoading in Rpm).value.get} package ${rpmFile} to $output")
+    streams.value.log.info(s"Moving rpm ${(serverLoading in Rpm).value} package ${rpmFile} to $output")
     output
   }
 )
 
 addCommandAlias("packageAll", ";packageDebian; packageRpm")
 
-addCommandAlias("packageDebian",  ";set serverLoading in Debian := Some(com.typesafe.sbt.packager.archetypes.systemloader.ServerLoader.SystemV)" +
+addCommandAlias("packageDebian",  ";set serverLoading in Debian := com.typesafe.sbt.packager.archetypes.ServerLoader.SystemV" +
   ";packageDebianSystemV" +
-  ";set serverLoading in Debian := Some(com.typesafe.sbt.packager.archetypes.systemloader.ServerLoader.Upstart)" +
+  ";set serverLoading in Debian := com.typesafe.sbt.packager.archetypes.ServerLoader.Upstart" +
   ";packageDebianUpstart" +
-  ";set serverLoading in Debian := Some(com.typesafe.sbt.packager.archetypes.systemloader.ServerLoader.Systemd)" +
+  ";set serverLoading in Debian := com.typesafe.sbt.packager.archetypes.ServerLoader.Systemd" +
   ";packageDebianSystemd")
 
-addCommandAlias("packageRpm",  ";set serverLoading in Rpm := Some(com.typesafe.sbt.packager.archetypes.systemloader.ServerLoader.SystemV)" +
+addCommandAlias("packageRpm",  ";set serverLoading in Rpm := com.typesafe.sbt.packager.archetypes.ServerLoader.SystemV" +
   ";packageRpmSystemV" +
-  ";set serverLoading in Rpm := Some(com.typesafe.sbt.packager.archetypes.systemloader.ServerLoader.Systemd)" +
+  ";set serverLoading in Rpm := com.typesafe.sbt.packager.archetypes.ServerLoader.Systemd" +
   ";packageRpmSystemd")
 
 
@@ -281,7 +301,6 @@ lazy val marathon = (project in file("."))
   .configs(UnstableTest)
   .configs(UnstableIntegrationTest)
   .enablePlugins(GitBranchPrompt, JavaServerAppPackaging, DockerPlugin, DebianPlugin, RpmPlugin, JDebPackaging,
-    SystemVPlugin, SystemdPlugin, UpstartPlugin,
     CopyPasteDetector, RamlGeneratorPlugin, BasicLintingPlugin, GitVersioning)
   .dependsOn(`plugin-interface`)
   .settings(commonSettings: _*)
