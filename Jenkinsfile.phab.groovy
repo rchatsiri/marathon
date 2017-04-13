@@ -84,9 +84,6 @@ ansiColor('gnome-terminal') {
           m.publish_test_coverage("Integration Test Coverage")
         }
       }
-      stage("Assemble Binaries") {
-        m.assembly()
-      }
       stage("Package Binaries") {
         m.package_binaries()
       }
@@ -109,6 +106,11 @@ ansiColor('gnome-terminal') {
           m.phabricator("differential.revision.edit", """ transactions: [{type: "accept", value: true}, {type: "comment", value: "$icon Build of $DIFF_ID completed at $BUILD_URL"}], objectIdentifier: "D$REVISION_ID" """)
         } catch (Exception err) {
           m.phabricator("differential.revision.edit", """ transactions: [{type: "comment", value: "$icon Build of $DIFF_ID completed at $BUILD_URL"}], objectIdentifier: "D$REVISION_ID" """)
+        }
+      }
+      if (env.PUBLISH_SNAPSHOT == "true") {
+        stage("Publish Artifacts") {
+          m.publish_artifacts()
         }
       }
     } catch (Exception err) {

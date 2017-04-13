@@ -19,32 +19,6 @@ def formattingTestArg(target: File) = Tests.Argument("-u", target.getAbsolutePat
 resolvers += Resolver.sonatypeRepo("snapshots")
 addCompilerPlugin("org.psywerx.hairyfotr" %% "linter" % "0.1.17")
 
-/**
-  * This on load trigger is used to set parameters in teamcity.
-  * It is only executed within teamcity and can be ignored otherwise.
-  * It will set values as build and env parameter.
-  * Those parameters can be used in subsequent build steps and dependent builds.
-  * TeamCity does this by watching the output of the build it currently performs.
-  * See: https://confluence.jetbrains.com/display/TCD8/Build+Script+Interaction+with+TeamCity
-  */
-lazy val teamCitySetEnvSettings = Seq(
-  onLoad in Global := {
-    sys.env.get("TEAMCITY_VERSION") match {
-      case None => // no-op
-      case Some(teamcityVersion) =>
-        def reportParameter(key: String, value: String): Unit = {
-          //env parameters will be made available as environment variables
-          println(s"##teamcity[setParameter name='env.SBT_$key' value='$value']")
-          //system parameters will be made available as teamcity build parameters
-          println(s"##teamcity[setParameter name='system.sbt.$key' value='$value']")
-        }
-        reportParameter("SCALA_VERSION", scalaVersion.value)
-        reportParameter("PROJECT_VERSION", version.value)
-    }
-    (onLoad in Global).value
-  }
-)
-
 lazy val formatSettings = SbtScalariform.scalariformSettings ++ Seq(
   ScalariformKeys.preferences := FormattingPreferences()
     .setPreference(AlignArguments, false)
@@ -212,7 +186,7 @@ lazy val packagingSettings = Seq(
   daemonStdoutLogFile := None,
   debianChangelog in Debian := Some(baseDirectory.value / "changelog.md"),
   rpmRequirements in Rpm := Seq("coreutils", "unzip", "java >= 1:1.8.0"),
-  dockerBaseImage := "openjdk:8u121-jdk",
+  dockerBaseImage := "openjdk:8-jdk",
   dockerExposedPorts := Seq(8080),
   dockerRepository := Some("mesosphere"),
   daemonUser in Docker := "root",
@@ -242,7 +216,7 @@ lazy val packagingSettings = Seq(
   },
   packageDebianSystemV := {
     val debianFile = (packageBin in Debian).value
-    val output = target.value / "packages" /  s"systemv-${debianFile.getName}"
+    val output = target.value / "packages" /  s"sysvinit-${debianFile.getName}"
     IO.move(debianFile, output)
     streams.value.log.info(s"Moved debian ${(serverLoading in Debian).value} package $debianFile to $output")
     output
@@ -256,7 +230,7 @@ lazy val packagingSettings = Seq(
   },
   packageRpmSystemV := {
     val rpmFile = (packageBin in Rpm).value
-    val output = target.value / "packages" /  s"systemv-${rpmFile.getName}"
+    val output = target.value / "packages" /  s"sysvinit-${rpmFile.getName}"
     IO.move(rpmFile, output)
     streams.value.log.info(s"Moving rpm ${(serverLoading in Rpm).value} package $rpmFile to $output")
     output
@@ -270,7 +244,7 @@ lazy val packagingSettings = Seq(
   }
 )
 
-addCommandAlias("packageAll", ";packageDebian; packageRpm")
+addCommandAlias("packageAll", ";universal:packageBin; docker:publishLocal; packageDebian; packageRpm")
 
 addCommandAlias("packageDebian",  ";set serverLoading in Debian := com.typesafe.sbt.packager.archetypes.ServerLoader.SystemV" +
   ";packageDebianSystemV" +
@@ -309,7 +283,6 @@ lazy val marathon = (project in file("."))
   .settings(commonSettings: _*)
   .settings(formatSettings: _*)
   .settings(packagingSettings: _*)
-  .settings(teamCitySetEnvSettings: _*)
   .settings(
     unmanagedResourceDirectories in Compile += file("docs/docs/rest-api"),
     libraryDependencies ++= Dependencies.marathon,

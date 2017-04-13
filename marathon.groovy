@@ -178,37 +178,55 @@ def unstable_test() {
 }
 
 def assembly() {
-  sh "sudo -E sbt assembly"
-  sh "sudo bin/build-distribution"
+  return this
 }
 
 def package_binaries() {
-  gitVersion = sh(returnStdout: true, script: 'git describe --tags --always').trim()
+  sh("sudo sbt packageAll")
+}
 
-  parallel(
-      "Tar Binaries": {
-        sh """sudo tar -czv -f "target/marathon-${gitVersion}.tgz" \
-                      Dockerfile \
-                      README.md \
-                      LICENSE \
-                      bin \
-                      examples \
-                      docs \
-                      target/scala-2.*/marathon-assembly-*.jar
-                 """
-      },
-      "Create Debian and Red Hat Package": {
-        dir("packaging") {
-          sh "sudo make all"
-        }
-      },
-      "Build Docker Image": {
-        // target is in .dockerignore so we just copy the jar before.
-        sh "cp target/*/marathon-assembly-*.jar ."
-        mesosVersion = sh(returnStdout: true, script: "sed -n 's/^.*MesosDebian = \"\\(.*\\)\"/\\1/p' <./project/Dependencies.scala").trim()
-        docker.build("mesosphere/marathon:${gitVersion}", "--build-arg MESOS_VERSION=${mesosVersion} .")
-      }
-  )
+def is_phabricator_build() {
+  return "".equals(env.DIFF_ID)
+}
+
+def publish_artifacts() {
+  // Only create latest-dev snapshot for master.
+  if (env.BRANCH_NAME == "master" && !is_phabricator_build()) {
+    gitTag = sh(returnStdout: true, script: "git describe --tags --always").trim()
+    docker.image("mesosphere/marathon:${gitTag}").tag("latest-dev")
+    docker.withRegistry("https://index.docker.io/v1/", "docker-hub-credentials") {
+      docker.image("mesosphere/marathon:latest-dev").push()
+    }
+  } else if (env.PUBLISH_SNAPSHOT == "true") {
+    gitTag = sh(returnStdout: true, script: "git describe --tags --always").trim()
+    docker.withRegistry("https://index.docker.io/v1/", "docker-hub-credentials") {
+      docker.image("mesosphere/marathon:${gitTag}").push()
+    }
+  } else if (env.BRANCH_NAME == "releases" && !is_phabricator_build()) {
+    gitTag = sh(returnStdout: true, script: "git describe --tags --always").trim()
+    docker.withRegistry("https://index.docker.io/v1/", "docker-hub-credentials") {
+      docker.image("mesosphere/marathon:${gitTag}").push()
+    }
+  }
+  if (env.BRANCH_NAME == "master" || env.PUBLISH_SNAPSHOT == true || env.BRANCH_NAME.startsWith("releases/")) {
+    step([
+        $class: 'S3BucketPublisher',
+        entries: [[
+            sourceFile: "target/universal/marathon-*.tgz",
+            bucket: 'marathon-artifacts',
+            selectedRegion: 'us-west-2',
+            noUploadOnFailure: true,
+            managedArtifacts: true,
+            flatten: true,
+            showDirectlyInBrowser: false,
+            keepForever: true,
+        ]],
+        profileName: 'marathon-artifacts',
+        dontWaitForConcurrentBuildCompletion: false,
+        consoleLogLevel: 'INFO',
+        pluginFailureResultConstraint: 'FAILURE'
+    ])
+  }
 }
 
 /**
