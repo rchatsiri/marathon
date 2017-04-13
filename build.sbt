@@ -4,7 +4,7 @@ import java.time.LocalDate
 
 import com.amazonaws.auth.{EnvironmentVariableCredentialsProvider, InstanceProfileCredentialsProvider}
 import com.typesafe.sbt.SbtScalariform.ScalariformKeys
-import com.typesafe.sbt.packager.docker.ExecCmd
+import com.typesafe.sbt.packager.docker.Cmd
 import mesosphere.raml.RamlGeneratorPlugin
 
 import scalariform.formatter.preferences.{AlignArguments, AlignParameters, AlignSingleLineCaseStatements, CompactControlReadability, DanglingCloseParenthesis, DoubleIndentClassDeclaration, FormatXml, FormattingPreferences, IndentSpaces, IndentWithTabs, MultilineScaladocCommentsStartOnFirstLine, PlaceScaladocAsterisksBeneathSecondAsterisk, Preserve, PreserveSpaceBeforeArguments, SpaceBeforeColon, SpaceInsideBrackets, SpaceInsideParentheses, SpacesAroundMultiImports, SpacesWithinPatternBinders}
@@ -212,57 +212,60 @@ lazy val packagingSettings = Seq(
   daemonStdoutLogFile := None,
   debianChangelog in Debian := Some(baseDirectory.value / "changelog.md"),
   rpmRequirements in Rpm := Seq("coreutils", "unzip", "java >= 1:1.8.0"),
-  dockerBaseImage in Docker := "openjdk:8u121-jdk",
-  dockerExposedPorts in Docker := Seq(8080),
-  dockerRepository in Docker := Some("mesosphere"),
+  dockerBaseImage := "openjdk:8u121-jdk",
+  dockerExposedPorts := Seq(8080),
+  dockerRepository := Some("mesosphere"),
+  daemonUser in Docker := "root",
   dockerCommands ++= Seq(
-    ExecCmd("RUN", "apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv E56151BF && \\" +
-    "echo \"deb http://repos.mesosphere.com/debian jessie-testing main\" | tee -a /etc/apt/sources.list.d/mesosphere.list && \\" +
-    "echo \"deb http://repos.mesosphere.com/debian jessie main\" | tee -a /etc/apt/sources.list.d/mesosphere.list && \\" +
-    "apt-get update && \\" +
-    s"apt-get install --no-install-recommends -y --force-yes mesos=${Dependency.V.MesosDebian} && \\" +
-    "apt-get clean")
+    Cmd("RUN", "apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv E56151BF && " +
+        "echo deb http://repos.mesosphere.com/debian jessie-testing main | tee -a /etc/apt/sources.list.d/mesosphere.list && " +
+        "echo deb http://repos.mesosphere.com/debian jessie main | tee -a /etc/apt/sources.list.d/mesosphere.list && " +
+        "apt-get update && " +
+        s"apt-get install --no-install-recommends -y --force-yes mesos=${Dependency.V.MesosDebian} && " +
+        "apt-get clean"
+    ),
+    Cmd("RUN", "chown -R daemon:daemon ."),
+    Cmd("USER", "daemon")
   ),
   bashScriptExtraDefines +=
     """
       |for env_op in `env | grep -v ^MARATHON_APP | grep ^MARATHON_ | awk '{gsub(/MARATHON_/,""); gsub(/=/," "); printf("%s%s ", "--", tolower($1)); for(i=2;i<=NF;i++){printf("%s ", $i)}}'`; do
       |  addApp "$env_op"
       |done
-      |
     """.stripMargin,
   packageDebianUpstart := {
     val debianFile = (packageBin in Debian).value
     val output = target.value / "packages" / s"upstart-${debianFile.getName}"
     IO.move(debianFile, output)
-    streams.value.log.info(s"Moved debian ${(serverLoading in Debian).value} package ${debianFile} to $output")
+    streams.value.log.info(s"Moved debian ${(serverLoading in Debian).value} package $debianFile to $output")
     output
   },
   packageDebianSystemV := {
     val debianFile = (packageBin in Debian).value
     val output = target.value / "packages" /  s"systemv-${debianFile.getName}"
     IO.move(debianFile, output)
-    streams.value.log.info(s"Moved debian ${(serverLoading in Debian).value} package ${debianFile} to $output")
+    streams.value.log.info(s"Moved debian ${(serverLoading in Debian).value} package $debianFile to $output")
     output
   },
   packageDebianSystemd := {
     val debianFile = (packageBin in Debian).value
     val output = target.value / "packages" /  s"systemd-${debianFile.getName}"
     IO.move(debianFile, output)
-    streams.value.log.info(s"Moving debian ${(serverLoading in Debian).value} package ${debianFile} to $output")
+    streams.value.log.info(s"Moving debian ${(serverLoading in Debian).value} package $debianFile to $output")
     output
   },
   packageRpmSystemV := {
     val rpmFile = (packageBin in Rpm).value
     val output = target.value / "packages" /  s"systemv-${rpmFile.getName}"
     IO.move(rpmFile, output)
-    streams.value.log.info(s"Moving rpm ${(serverLoading in Rpm).value} package ${rpmFile} to $output")
+    streams.value.log.info(s"Moving rpm ${(serverLoading in Rpm).value} package $rpmFile to $output")
     output
   },
   packageRpmSystemd := {
     val rpmFile = (packageBin in Rpm).value
     val output = target.value / "packages" /  s"systemd-${rpmFile.getName}"
     IO.move(rpmFile, output)
-    streams.value.log.info(s"Moving rpm ${(serverLoading in Rpm).value} package ${rpmFile} to $output")
+    streams.value.log.info(s"Moving rpm ${(serverLoading in Rpm).value} package $rpmFile to $output")
     output
   }
 )
