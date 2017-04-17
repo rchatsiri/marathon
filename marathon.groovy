@@ -232,6 +232,7 @@ def publish_artifacts() {
       sh "scp -p target/packages/*${gitTag}* target/packages/*.rpm pkgmaintainer@repo1.hw.ca1.mesosphere.com:~/repo/incoming/marathon-${gitTag}"
       sh "ls && ls scripts/"
       sh """GIT_TAG=${gitTag} ssh -o SendEnv=GIT_TAG -o StrictHostKeyChecking=no pkgmaintainer@repo1.hw.ca1.mesosphere.com "bash -s --" < scripts/publish_packages.sh """
+      sh """ssh pkgmaintainer@repo1.hw.ca1.mesosphere.com "rm -rf ~/repo/incoming/marathon-${gitTag}" """
     }
   } else {
     echo "Skipping Publishing"
