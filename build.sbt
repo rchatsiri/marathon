@@ -245,7 +245,7 @@ lazy val packagingSettings = Seq(
   mappings in (Compile, packageDoc) := Seq()
 )
 
-addCommandAlias("packageAll", ";universal:packageBin; docker:publishLocal; packageDebian; packageRpm")
+addCommandAlias("packageAll", ";universal:packageBin; universal:packageXzTarball; docker:publishLocal; packageDebian; packageRpm")
 
 addCommandAlias("packageDebian",  ";set serverLoading in Debian := com.typesafe.sbt.packager.archetypes.ServerLoader.SystemV" +
   ";packageDebianSystemV" +
