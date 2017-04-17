@@ -226,6 +226,10 @@ def publish_artifacts() {
         consoleLogLevel: 'INFO',
         pluginFailureResultConstraint: 'FAILURE'
     ])
+    sshagent (credentials: ['0f7ec9c9-99b2-4797-9ed5-625572d5931d']) {
+      sh 'scp -o StrictHostKeyChecking=no target/packages/* pkgmaintainer@repo1.hw.ca1.mesosphere.com:incoming/'
+      sh 'ssh -o StrictHostKeyChecking=no pkgmaintainer@repo1.hw.ca1.mesosphere.com "ls incoming/"'
+    }
   }
 }
 
