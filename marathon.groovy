@@ -191,7 +191,7 @@ def is_phabricator_build() {
 
 def publish_artifacts() {
   // Only create latest-dev snapshot for master.
-  if (env.BRANCH_NAME == "master" && !is_phabricator_build()) {
+  /*if (env.BRANCH_NAME == "master" && !is_phabricator_build()) {
     gitTag = sh(returnStdout: true, script: "git describe --tags --always").trim()
     docker.image("mesosphere/marathon:${gitTag}").tag("latest-dev")
     docker.withRegistry("https://index.docker.io/v1/", "docker-hub-credentials") {
@@ -207,9 +207,10 @@ def publish_artifacts() {
     docker.withRegistry("https://index.docker.io/v1/", "docker-hub-credentials") {
       docker.image("mesosphere/marathon:${gitTag}").push()
     }
-  }
+  }*/
   if (env.BRANCH_NAME == "master" || env.PUBLISH_SNAPSHOT == true || env.BRANCH_NAME.startsWith("releases/")) {
-    step([
+    gitTag = sh(returnStdout: true, script: "git describe --tags --always").trim()
+    /*step([
         $class: 'S3BucketPublisher',
         entries: [[
             sourceFile: "target/universal/marathon-*.tgz",
@@ -225,10 +226,10 @@ def publish_artifacts() {
         dontWaitForConcurrentBuildCompletion: false,
         consoleLogLevel: 'INFO',
         pluginFailureResultConstraint: 'FAILURE'
-    ])
+    ])*/
     sshagent (credentials: ['0f7ec9c9-99b2-4797-9ed5-625572d5931d']) {
-      sh 'scp -o StrictHostKeyChecking=no target/packages/* pkgmaintainer@repo1.hw.ca1.mesosphere.com:incoming/'
-      sh 'ssh -o StrictHostKeyChecking=no pkgmaintainer@repo1.hw.ca1.mesosphere.com "ls incoming/"'
+      sh "scp -o StrictHostKeyChecking=no target/packages/* pkgmaintainer@repo1.hw.ca1.mesosphere.com:incoming/marathon-${gitTag}"
+      sh """ssh -o StrictHostKeyChecking=no pkgmaintainer@repo1.hw.ca1.mesosphere.com "ls incoming/marathon-${gitTag}" """
     }
   }
 }
