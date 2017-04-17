@@ -191,26 +191,24 @@ def is_phabricator_build() {
 }
 
 def publish_artifacts() {
+  gitTag = sh(returnStdout: true, script: "git describe --tags --always").trim().replaceFirst("v", "")
+
   // Only create latest-dev snapshot for master.
   /*if (env.BRANCH_NAME == "master" && !is_phabricator_build()) {
-    gitTag = sh(returnStdout: true, script: "git describe --tags --always").trim()
     docker.image("mesosphere/marathon:${gitTag}").tag("latest-dev")
     docker.withRegistry("https://index.docker.io/v1/", "docker-hub-credentials") {
       docker.image("mesosphere/marathon:latest-dev").push()
     }
   } else if (env.PUBLISH_SNAPSHOT == "true") {
-    gitTag = sh(returnStdout: true, script: "git describe --tags --always").trim()
     docker.withRegistry("https://index.docker.io/v1/", "docker-hub-credentials") {
       docker.image("mesosphere/marathon:${gitTag}").push()
     }
   } else if (env.BRANCH_NAME == "releases" && !is_phabricator_build()) {
-    gitTag = sh(returnStdout: true, script: "git describe --tags --always").trim()
     docker.withRegistry("https://index.docker.io/v1/", "docker-hub-credentials") {
       docker.image("mesosphere/marathon:${gitTag}").push()
     }
   }*/
   if (env.BRANCH_NAME == "master" || env.PUBLISH_SNAPSHOT == "true") { //|| env.BRANCH_NAME.startsWith("releases/")) {
-    gitTag = sh(returnStdout: true, script: "git describe --tags --always").trim()
     /*step([
         $class: 'S3BucketPublisher',
         entries: [[
