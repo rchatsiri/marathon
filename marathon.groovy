@@ -228,7 +228,7 @@ def publish_artifacts() {
     ])*/
     sshagent (credentials: ['0f7ec9c9-99b2-4797-9ed5-625572d5931d']) {
       echo "Uploading Artifacts to package server"
-      sh "scp -o StrictHostKeyChecking=no target/packages/marathon*${gitTag}* pkgmaintainer@repo1.hw.ca1.mesosphere.com:repo/incoming/marathon-${gitTag}"
+      sh "scp -o StrictHostKeyChecking=no target/packages/*marathon*${gitTag}* pkgmaintainer@repo1.hw.ca1.mesosphere.com:repo/incoming/marathon-${gitTag}"
       sh """GIT_TAG=${gitTag} ssh -o SendEnv=GIT_TAG -o StrictHostKeyChecking=no pkgmaintainer@repo1.hw.ca1.mesosphere.com "bash -s -- < scripts/publish_packages.sh" """
     }
   } else {
