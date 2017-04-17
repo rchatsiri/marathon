@@ -241,7 +241,8 @@ lazy val packagingSettings = Seq(
     IO.move(rpmFile, output)
     streams.value.log.info(s"Moving rpm ${(serverLoading in Rpm).value} package $rpmFile to $output")
     output
-  }
+  },
+  mappings in (Compile, packageDoc) := Seq()
 )
 
 addCommandAlias("packageAll", ";universal:packageBin; docker:publishLocal; packageDebian; packageRpm")

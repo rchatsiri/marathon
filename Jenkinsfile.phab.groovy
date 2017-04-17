@@ -50,7 +50,7 @@ ansiColor('gnome-terminal') {
       checkout scm
       m = load('marathon.groovy')
     }
-    stage("Package and publish") {
+    stage("Package") {
       m.package_binaries()
     }
     stage("Publish Artifacts") {
