@@ -48,7 +48,14 @@ ansiColor('gnome-terminal') {
     }
     stage("Checkout D$REVISION_ID($DIFF_ID)") {
       checkout scm
-      /*checkout_marathon_master()
+      m = load('marathon.groovy')
+    }
+    stage("Package and publish") {
+      m.package_binaries()
+      m.publish_artifacts()
+    }
+    /*
+      checkout_marathon_master()
       m = load('marathon.groovy')
       m.clean_git()
       m.phabricator_apply_diff("$PHID", "$BUILD_URL", "$REVISION_ID", "$DIFF_ID")
@@ -84,11 +91,10 @@ ansiColor('gnome-terminal') {
           m.phabricator_convert_test_coverage()
           m.publish_test_coverage("Integration Test Coverage")
         }
-      }*/
+      }
       stage("Package Binaries") {
         m.package_binaries()
       }
-      /*
       stage("Unstable Test") {
         if (m.has_unstable_tests()) {
           m.ignore_error {
@@ -109,7 +115,7 @@ ansiColor('gnome-terminal') {
         } catch (Exception err) {
           m.phabricator("differential.revision.edit", """ transactions: [{type: "comment", value: "$icon Build of $DIFF_ID completed at $BUILD_URL"}], objectIdentifier: "D$REVISION_ID" """)
         }
-      }*/
+      }
       if (env.PUBLISH_SNAPSHOT == "true") {
         stage("Publish Artifacts") {
           m.publish_artifacts()
@@ -118,14 +124,15 @@ ansiColor('gnome-terminal') {
     } catch (Exception err) {
       stage("Publish Results") {
         m.clean_git()
-      /*  m.phabricator_test_results("fail")
+        m.phabricator_test_results("fail")
         try {
           m.phabricator("differential.revision.edit", """ transactions: [{type: "reject", value: true}, {type: "comment", value: "\u2717 Build of $DIFF_ID Failed at $BUILD_URL"}], objectIdentifier: "D$REVISION_ID" """)
         } catch (Exception ignored) {
           m.phabricator("differential.revision.edit", """ transactions: [{type: "comment", value: "\u2717 Build of $DIFF_ID Failed at $BUILD_URL"}], objectIdentifier: "D$REVISION_ID" """)
         }
-        m.currentBuild.result = "FAILURE"*/
+        m.currentBuild.result = "FAILURE"
       }
     }
+    */
   }
 }
