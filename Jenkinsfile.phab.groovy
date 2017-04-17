@@ -51,8 +51,8 @@ ansiColor('gnome-terminal') {
       m = load('marathon.groovy')
       m.clean_git()
       m.phabricator_apply_diff("$PHID", "$BUILD_URL", "$REVISION_ID", "$DIFF_ID")
-      // load it again in case it changed.
-      m = load('marathon.groovy')
+      // TODO: Remove commented out line... load it again in case it changed.
+      //m = load('marathon.groovy')
     }
 
     if (m == null) {
