@@ -209,7 +209,7 @@ def publish_artifacts() {
       docker.image("mesosphere/marathon:${gitTag}").push()
     }
   }*/
-  if (env.BRANCH_NAME == "master" || env.PUBLISH_SNAPSHOT == true || env.BRANCH_NAME.startsWith("releases/")) {
+  if (env.BRANCH_NAME == "master" || env.PUBLISH_SNAPSHOT == true) { //|| env.BRANCH_NAME.startsWith("releases/")) {
     gitTag = sh(returnStdout: true, script: "git describe --tags --always").trim()
     /*step([
         $class: 'S3BucketPublisher',
