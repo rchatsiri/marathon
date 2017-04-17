@@ -52,6 +52,8 @@ ansiColor('gnome-terminal') {
     }
     stage("Package and publish") {
       m.package_binaries()
+    }
+    stage("Publish Artifacts") {
       m.publish_artifacts()
     }
     /*
