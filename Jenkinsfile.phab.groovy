@@ -47,12 +47,13 @@ ansiColor('gnome-terminal') {
       install_dependencies()
     }
     stage("Checkout D$REVISION_ID($DIFF_ID)") {
-      checkout_marathon_master()
+      checkout scm
+      /*checkout_marathon_master()
       m = load('marathon.groovy')
       m.clean_git()
       m.phabricator_apply_diff("$PHID", "$BUILD_URL", "$REVISION_ID", "$DIFF_ID")
-      // TODO: Remove commented out line... load it again in case it changed.
-      //m = load('marathon.groovy')
+      // load it again in case it changed.
+      m = load('marathon.groovy')
     }
 
     if (m == null) {
@@ -65,7 +66,7 @@ ansiColor('gnome-terminal') {
       stage("Kill junk processes") {
         m.kill_junk()
       }
-      /*stage("Compile") {
+      stage("Compile") {
         m.compile()
       }
       stage("Test") {
