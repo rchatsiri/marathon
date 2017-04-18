@@ -86,7 +86,6 @@ ansiColor('gnome-terminal') {
       stage("Kill junk processes") {
         m.kill_junk()
       }
-      /*
       stage("Compile") {
         m.compile()
       }
@@ -106,11 +105,16 @@ ansiColor('gnome-terminal') {
           m.publish_test_coverage("Integration Test Coverage")
         }
       }
-      */
       stage("Package Binaries") {
         m.package_binaries()
       }
-      /*
+      stage("Publish Artifacts") {
+        if (env.PUBLISH_SNAPSHOT == "true") {
+          m.publish_artifacts()
+        } else {
+          echo "Skipping Artifact Publishing, snapshot publishing not requested."
+        }
+      }
       stage("Unstable Test") {
         if (m.has_unstable_tests()) {
           m.ignore_error {
@@ -120,12 +124,6 @@ ansiColor('gnome-terminal') {
           m.publish_test_coverage("Unstable Test Coverage")
         } else {
           echo "No Unstable Tests \u2713"
-        }
-      }
-      */
-      if (env.PUBLISH_SNAPSHOT == "true") {
-        stage("Publish Artifacts") {
-          m.publish_artifacts()
         }
       }
       stage("Publish Results") {

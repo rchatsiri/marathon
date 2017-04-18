@@ -214,11 +214,7 @@ def publish_artifacts() {
           docker.withRegistry("https://index.docker.io/v1/", "docker-hub-credentials") {
             docker.image("mesosphere/marathon:latest-dev").push()
           }
-        } else if (env.PUBLISH_SNAPSHOT == "true") {
-          docker.withRegistry("https://index.docker.io/v1/", "docker-hub-credentials") {
-            docker.image("mesosphere/marathon:${gitTag}").push()
-          }
-        } else if (is_release_build(gitTag) && !is_phabricator_build()) {
+        } else if (env.PUBLISH_SNAPSHOT == "true" || (is_release_build(gitTag) && !is_phabricator_build())) {
           docker.withRegistry("https://index.docker.io/v1/", "docker-hub-credentials") {
             docker.image("mesosphere/marathon:${gitTag}").push()
           }
