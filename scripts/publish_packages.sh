@@ -11,8 +11,8 @@ case "$GIT_TAG" in
 esac
 
 
-dpkg-sig -k E56151BF --sign builder *marathon*.deb
-rpm --resign -D "_signature gpg" -D "_gpg_name E56151BF" *marathon*.rpm
+ls *marathon*.deb | xargs $HOME/bin/sign_deb_package.sh
+ls *marathon*.rpm | xargs $HOME/bin/sign_rpm_package.expect
 
 echo "Publishing marathon with ${GIT_TAG} ($(ls *)) to ${PKG_TYPE}"
 
