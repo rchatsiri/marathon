@@ -86,10 +86,10 @@ ansiColor('gnome-terminal') {
       stage("Kill junk processes") {
         m.kill_junk()
       }
+      /*
       stage("Compile") {
         m.compile()
       }
-      /*
       stage("Test") {
         try {
           m.test()

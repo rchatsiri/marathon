@@ -242,7 +242,10 @@ lazy val packagingSettings = Seq(
     streams.value.log.info(s"Moving rpm ${(serverLoading in Rpm).value} package $rpmFile to $output")
     output
   },
-  mappings in (Compile, packageDoc) := Seq()
+  mappings in (Compile, packageDoc) := Seq(),
+  // don't put in an extra directory, this makes it easier to install into DC/OS and tar/zip can
+  // extract into a directory anyways.
+  topLevelDirectory := None
 )
 
 addCommandAlias("packageAll", ";universal:packageBin; universal:packageXzTarball; docker:publishLocal; packageDebian; packageRpm")
