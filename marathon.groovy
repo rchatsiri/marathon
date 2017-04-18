@@ -229,11 +229,11 @@ def publish_artifacts() {
     ])*/
     sshagent (credentials: ['0f7ec9c9-99b2-4797-9ed5-625572d5931d']) {
       echo "Uploading Artifacts to package server"
-      sh """ssh pkgmaintainer@repo1.hw.ca1.mesosphere.com "mkdir -p ~/repo/incoming/marathon-${gitTag}" """
-      sh "scp -B -v -p target/packages/*${gitTag}* target/packages/*.rpm pkgmaintainer@repo1.hw.ca1.mesosphere.com:~/repo/incoming/marathon-${gitTag}"
+      sh """ssh -o StrictHostKeyChecking=no pkgmaintainer@repo1.hw.ca1.mesosphere.com "mkdir -p ~/repo/incoming/marathon-${gitTag}" """
+      sh "scp -o StrictHostKeyChecking=no -B -v -p target/packages/*${gitTag}* target/packages/*.rpm pkgmaintainer@repo1.hw.ca1.mesosphere.com:~/repo/incoming/marathon-${gitTag}"
       sh "ls && ls scripts/"
-      sh """GIT_TAG=${gitTag} ssh -o "BatchMode yes" -o SendEnv=GIT_TAG -o StrictHostKeyChecking=no pkgmaintainer@repo1.hw.ca1.mesosphere.com "bash -s --" < scripts/publish_packages.sh """
-      sh """ssh pkgmaintainer@repo1.hw.ca1.mesosphere.com "rm -rf ~/repo/incoming/marathon-${gitTag}" """
+      sh """GIT_TAG=${gitTag} ssh -o StrictHostKeyChecking=no -o BatchMode=yes -o SendEnv=GIT_TAG -o StrictHostKeyChecking=no pkgmaintainer@repo1.hw.ca1.mesosphere.com "bash -s --" < scripts/publish_packages.sh """
+      sh """ssh -o StrictHostKeyChecking=no -o BatchMode=yes pkgmaintainer@repo1.hw.ca1.mesosphere.com "rm -rf ~/repo/incoming/marathon-${gitTag}" """
     }
   } else {
     echo "Skipping Publishing"
