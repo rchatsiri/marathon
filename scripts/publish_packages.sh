@@ -2,7 +2,7 @@
 env
 
 
-cd marathon-${GIT_TAG}
+cd repo/incoming/marathon-${GIT_TAG}
 
 PKG_TYPE=""
 case "$GIT_TAG" in
