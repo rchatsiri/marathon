@@ -17,9 +17,9 @@
    }
    }}}
 
- - Don't forget to push/update.
+ - Don't forget to push/update and undo the last piece before you submit.
+ - If you need to test it against master too, name your branch with pipelines/ as a prefix.
  */
-
 
 /* BEGIN: Things defined in marathon.groovy that have to be duplicated because we don't have marathon.groovy available at the time they are needed. */
 // Install job-level dependencies that aren't specific to the build and

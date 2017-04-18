@@ -1,4 +1,11 @@
 #!/usr/bin/env bash
+
+# This file should run on the package server itself to move
+# the packages into the correct distro directories.
+# All the files have been copied into the package server
+# where a cron job will scan incoming, sign the packages, publish
+# into S3, etc every 5min.
+
 set -e
 set -o pipefail
 
