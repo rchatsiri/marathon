@@ -204,7 +204,7 @@ def is_release_build(gitTag) {
 def publish_artifacts() {
   gitTag = sh(returnStdout: true, script: "git describe --tags --always").trim().replaceFirst("v", "")
 
-  parallel
+  parallel(
     docker: {
       // Only create latest-dev snapshot for master.
       if (env.BRANCH_NAME == "master" && !is_phabricator_build()) {
@@ -260,6 +260,7 @@ def publish_artifacts() {
             consoleLogLevel: 'INFO',
             pluginFailureResultConstraint: 'FAILURE'
         ])
+      }
     },
     nativePackages: {
       sshagent (credentials: ['0f7ec9c9-99b2-4797-9ed5-625572d5931d']) {
@@ -269,7 +270,7 @@ def publish_artifacts() {
         sh """ssh -o StrictHostKeyChecking=no -o BatchMode=yes pkgmaintainer@repo1.hw.ca1.mesosphere.com "env GIT_TAG=${gitTag} bash -s --" < scripts/publish_packages.sh """
         sh """ssh -o StrictHostKeyChecking=no -o BatchMode=yes pkgmaintainer@repo1.hw.ca1.mesosphere.com "rm -rf ~/repo/incoming/marathon-${gitTag}" """
       }
-    }
+    })
   } else {
     echo "Skipping Publishing"
   }
