@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+env
+
 
 cd marathon-${GIT_TAG}
 
