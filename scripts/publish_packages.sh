@@ -11,11 +11,7 @@ case "$GIT_TAG" in
 esac
 
 
-ls *marathon*.deb | xargs $HOME/bin/sign_deb_package.sh
-ls *marathon*.rpm | xargs $HOME/bin/sign_rpm_package.expect
-
 echo "Publishing marathon with ${GIT_TAG} to ${PKG_TYPE}"
-
 
 # Debian 8
 cp systemd-marathon*.deb $HOME/repo/incoming/debian/jessie${PKG_TYPE}/

@@ -39,9 +39,6 @@ apt-get install -y \
 
 apt install -t jessie-backports -y openjdk-8-jdk
 
-# Install fpm which is used for deb and rpm packaging.
-gem install fpm
-
 # Download (but don't install) Mesos and its dependencies.
 # The CI task will install Mesos later.
 apt-get install -y -d mesos
@@ -51,6 +48,10 @@ mkdir -p /opt/arcanist
 git clone https://github.com/phacility/libphutil.git /opt/arcanist/libphutil
 git clone https://github.com/phacility/arcanist.git /opt/arcanist/arcanist
 ln -sf /opt/arcanist/arcanist/bin/arc /usr/local/bin/
+echo "{\"hosts\":{\"https://phabricator.mesosphere.com/api/\":{\"token\":\"$CONDUIT_TOKEN\"}}}" > /home/admin/.arcrc
+chown admin /home/admin/.arcrc
+chmod 0600 ~/.arcrc
+
 
 # Add user to docker group
 gpasswd -a admin docker
@@ -60,9 +61,12 @@ systemctl enable docker
 update-ca-certificates -f
 update-java-alternatives -s java-1.8.0-openjdk-amd64
 
-echo "{\"hosts\":{\"https://phabricator.mesosphere.com/api/\":{\"token\":\"$CONDUIT_TOKEN\"}}}" > /home/admin/.arcrc
-chown admin /home/admin/.arcrc
-curl -o /usr/bin/jq https://github.com/stedolan/jq/releases/download/jq-1.5/jq-linux64
+# Add jq
+curl -L https://github.com/stedolan/jq/releases/download/jq-1.5/jq-linux64 > /tmp/jq && mv /tmp/jq /usr/bin/jq && chmod +x /usr/bin/jq
+
+# Add Ammonite
+mkdir -p ~/.ammonite && curl -L -o ~/.ammonite/predef.sc https://git.io/v6r5y && mkdir -p ~/.ammonite && curl -L -o ~/.ammonite/predef.sc https://git.io/v6r5y
+curl -L -o /usr/local/bin/amm https://github.com/lihaoyi/Ammonite/releases/download/0.8.2/2.12-0.8.2 && chmod +x /usr/local/bin/amm
 
 # Warmup ivy2 cache
 git clone https://github.com/mesosphere/marathon.git /home/admin/marathon
