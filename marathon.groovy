@@ -204,62 +204,71 @@ def is_release_build(gitTag) {
 def publish_artifacts() {
   gitTag = sh(returnStdout: true, script: "git describe --tags --always").trim().replaceFirst("v", "")
 
-  // Only create latest-dev snapshot for master.
-  if (env.BRANCH_NAME == "master" && !is_phabricator_build()) {
-    docker.image("mesosphere/marathon:${gitTag}").tag("latest-dev")
-    docker.withRegistry("https://index.docker.io/v1/", "docker-hub-credentials") {
-      docker.image("mesosphere/marathon:latest-dev").push()
-    }
-  } else if (env.PUBLISH_SNAPSHOT == "true") {
-    docker.withRegistry("https://index.docker.io/v1/", "docker-hub-credentials") {
-      docker.image("mesosphere/marathon:${gitTag}").push()
-    }
-  } else if (is_release_build(gitTag) && !is_phabricator_build()) {
-    docker.withRegistry("https://index.docker.io/v1/", "docker-hub-credentials") {
-      docker.image("mesosphere/marathon:${gitTag}").push()
-    }
-  }
-  if (env.BRANCH_NAME == "master" || env.PUBLISH_SNAPSHOT == "true" || is_release_build()) {
-    storageClass = "STANDARD"
-    if (!is_release_build(gitTag)) {
-      storageClass = "STANDARD_IA"
-    }
-    step([
-        $class: 'S3BucketPublisher',
-        entries: [[
-            sourceFile: "target/universal/marathon-*.txz",
-            bucket: 'marathon-artifacts',
-            selectedRegion: 'us-west-2',
-            noUploadOnFailure: true,
-            managedArtifacts: true,
-            flatten: true,
-            showDirectlyInBrowser: true,
-            keepForever: true,
-            storageClass: storageClass,
-        ],
-        [
-            sourceFile: "target/universal/marathon-*.zip",
-            bucket: 'marathon-artifacts',
-            selectedRegion: 'us-west-2',
-            noUploadOnFailure: true,
-            managedArtifacts: true,
-            flatten: true,
-            showDirectlyInBrowser: true,
-            keepForever: true,
-            storageClass: storageClass,
-        ],
-        ],
-        profileName: 'marathon-artifacts',
-        dontWaitForConcurrentBuildCompletion: false,
-        consoleLogLevel: 'INFO',
-        pluginFailureResultConstraint: 'FAILURE'
-    ])
-    sshagent (credentials: ['0f7ec9c9-99b2-4797-9ed5-625572d5931d']) {
-      echo "Uploading Artifacts to package server"
-      sh """ssh -o StrictHostKeyChecking=no pkgmaintainer@repo1.hw.ca1.mesosphere.com "mkdir -p ~/repo/incoming/marathon-${gitTag}" """
-      sh "rsync -avzP target/packages/*${gitTag}* target/packages/*.rpm pkgmaintainer@repo1.hw.ca1.mesosphere.com:~/repo/incoming/marathon-${gitTag}"
-      sh """ssh -o StrictHostKeyChecking=no -o BatchMode=yes pkgmaintainer@repo1.hw.ca1.mesosphere.com "env GIT_TAG=${gitTag} bash -s --" < scripts/publish_packages.sh """
-      sh """ssh -o StrictHostKeyChecking=no -o BatchMode=yes pkgmaintainer@repo1.hw.ca1.mesosphere.com "rm -rf ~/repo/incoming/marathon-${gitTag}" """
+  parallel
+    docker: {
+      // Only create latest-dev snapshot for master.
+      if (env.BRANCH_NAME == "master" && !is_phabricator_build()) {
+        sh "docker tag mesosphere/marathon:${gitTag} mesosphere/marathon:latest-dev"
+        // TODO: Docker 1.12 doesn't support tag -f and the jenkins docker plugin still passes it in.
+        //docker.image("mesosphere/marathon:${gitTag}").tag("latest-dev")
+        docker.withRegistry("https://index.docker.io/v1/", "docker-hub-credentials") {
+          docker.image("mesosphere/marathon:latest-dev").push()
+        }
+      } else if (env.PUBLISH_SNAPSHOT == "true") {
+        docker.withRegistry("https://index.docker.io/v1/", "docker-hub-credentials") {
+          docker.image("mesosphere/marathon:${gitTag}").push()
+        }
+      } else if (is_release_build(gitTag) && !is_phabricator_build()) {
+        docker.withRegistry("https://index.docker.io/v1/", "docker-hub-credentials") {
+          docker.image("mesosphere/marathon:${gitTag}").push()
+        }
+      }
+    },
+    s3: {
+      if (env.BRANCH_NAME == "master" || env.PUBLISH_SNAPSHOT == "true" || is_release_build()) {
+        storageClass = "STANDARD"
+        if (!is_release_build(gitTag)) {
+          storageClass = "STANDARD_IA"
+        }
+        step([
+            $class: 'S3BucketPublisher',
+            entries: [[
+                sourceFile: "target/universal/marathon-*.txz",
+                bucket: 'marathon-artifacts',
+                selectedRegion: 'us-west-2',
+                noUploadOnFailure: true,
+                managedArtifacts: true,
+                flatten: true,
+                showDirectlyInBrowser: true,
+                keepForever: true,
+                storageClass: storageClass,
+            ],
+            [
+                sourceFile: "target/universal/marathon-*.zip",
+                bucket: 'marathon-artifacts',
+                selectedRegion: 'us-west-2',
+                noUploadOnFailure: true,
+                managedArtifacts: true,
+                flatten: true,
+                showDirectlyInBrowser: true,
+                keepForever: true,
+                storageClass: storageClass,
+            ],
+            ],
+            profileName: 'marathon-artifacts',
+            dontWaitForConcurrentBuildCompletion: false,
+            consoleLogLevel: 'INFO',
+            pluginFailureResultConstraint: 'FAILURE'
+        ])
+    },
+    nativePackages: {
+      sshagent (credentials: ['0f7ec9c9-99b2-4797-9ed5-625572d5931d']) {
+        echo "Uploading Artifacts to package server"
+        sh """ssh -o StrictHostKeyChecking=no pkgmaintainer@repo1.hw.ca1.mesosphere.com "mkdir -p ~/repo/incoming/marathon-${gitTag}" """
+        sh "rsync -avzP target/packages/*${gitTag}* target/packages/*.rpm pkgmaintainer@repo1.hw.ca1.mesosphere.com:~/repo/incoming/marathon-${gitTag}"
+        sh """ssh -o StrictHostKeyChecking=no -o BatchMode=yes pkgmaintainer@repo1.hw.ca1.mesosphere.com "env GIT_TAG=${gitTag} bash -s --" < scripts/publish_packages.sh """
+        sh """ssh -o StrictHostKeyChecking=no -o BatchMode=yes pkgmaintainer@repo1.hw.ca1.mesosphere.com "rm -rf ~/repo/incoming/marathon-${gitTag}" """
+      }
     }
   } else {
     echo "Skipping Publishing"
