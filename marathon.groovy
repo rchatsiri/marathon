@@ -139,7 +139,7 @@ def test() {
 
 def integration_test() {
   try {
-    timeout(time: 30, unit: 'MINUTES') {
+    timeout(time: 60, unit: 'MINUTES') {
       withEnv(['RUN_DOCKER_INTEGRATION_TESTS=true', 'RUN_MESOS_INTEGRATION_TESTS=true']) {
         STATUS = sh(script: """sudo -E sbt -Dsbt.log.format=false '; clean; coverage; integration:test; mesos-simulation/integration:test' """, returnStatus: true)
         sh """sudo -E sbt -Dsbt.log.format=false '; set coverageFailOnMinimum := false; coverageReport'"""
