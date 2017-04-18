@@ -3,8 +3,7 @@ set -e
 
 cd repo/incoming/marathon-${GIT_TAG}
 
-ls $HOME
-ls $HOME/repo
+ls -laR $HOME
 
 PKG_TYPE=""
 case "$GIT_TAG" in
