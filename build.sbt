@@ -203,6 +203,10 @@ lazy val packagingSettings = Seq(
   ),
   bashScriptExtraDefines +=
     """
+      |if [ -f /etc/marathon/conf ]; then;
+      |  echo "Warning: Please migrate /etc/marathon/conf into /etc/defaults/marathon. Support for reading /etc/marathon/conf will be removed in a future version" >&2
+      |  source /etc/marathon/conf
+      |fi
       |for env_op in `env | grep -v ^MARATHON_APP | grep ^MARATHON_ | awk '{gsub(/MARATHON_/,""); gsub(/=/," "); printf("%s%s ", "--", tolower($1)); for(i=2;i<=NF;i++){printf("%s ", $i)}}'`; do
       |  addApp "$env_op"
       |done

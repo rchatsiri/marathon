@@ -6,8 +6,7 @@
 # where a cron job will scan incoming, sign the packages, publish
 # into S3, etc every 5min.
 
-set -e
-set -o pipefail
+set -e -o pipefail
 
 cd repo/incoming/marathon-${GIT_TAG}
 
