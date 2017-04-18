@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 set -e
+set -o pipefail
 
 cd repo/incoming/marathon-${GIT_TAG}
-
-ls -laR $HOME
 
 PKG_TYPE=""
 case "$GIT_TAG" in
@@ -15,7 +14,7 @@ esac
 ls *marathon*.deb | xargs $HOME/bin/sign_deb_package.sh
 ls *marathon*.rpm | xargs $HOME/bin/sign_rpm_package.expect
 
-echo "Publishing marathon with ${GIT_TAG} ($(ls *)) to ${PKG_TYPE}"
+echo "Publishing marathon with ${GIT_TAG} to ${PKG_TYPE}"
 
 
 # Debian 8
