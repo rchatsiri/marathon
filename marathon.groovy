@@ -191,11 +191,21 @@ def is_phabricator_build() {
   return "".equals(env.DIFF_ID)
 }
 
+def is_release_build(gitTag) {
+  if (gitTag.contains("SNAPSHOT") || gitTag.contains("g")) {
+    return false
+  } else if (env.BRANCH_NAME == null) {
+    return false
+  } else if (env.BRANCH_NAME.startsWith("releases/")) {
+    return true
+  }
+}
+
 def publish_artifacts() {
   gitTag = sh(returnStdout: true, script: "git describe --tags --always").trim().replaceFirst("v", "")
 
   // Only create latest-dev snapshot for master.
-  /*if (env.BRANCH_NAME == "master" && !is_phabricator_build()) {
+  if (env.BRANCH_NAME == "master" && !is_phabricator_build()) {
     docker.image("mesosphere/marathon:${gitTag}").tag("latest-dev")
     docker.withRegistry("https://index.docker.io/v1/", "docker-hub-credentials") {
       docker.image("mesosphere/marathon:latest-dev").push()
@@ -204,29 +214,46 @@ def publish_artifacts() {
     docker.withRegistry("https://index.docker.io/v1/", "docker-hub-credentials") {
       docker.image("mesosphere/marathon:${gitTag}").push()
     }
-  } else if (env.BRANCH_NAME == "releases" && !is_phabricator_build()) {
+  } else if (is_release_build(gitTag) && !is_phabricator_build()) {
     docker.withRegistry("https://index.docker.io/v1/", "docker-hub-credentials") {
       docker.image("mesosphere/marathon:${gitTag}").push()
     }
-  }*/
-  if (env.BRANCH_NAME == "master" || env.PUBLISH_SNAPSHOT == "true") { //|| env.BRANCH_NAME.startsWith("releases/")) {
-    /*step([
+  }
+  if (env.BRANCH_NAME == "master" || env.PUBLISH_SNAPSHOT == "true" || is_release_build()) {
+    storageClass = "STANDARD"
+    if (!is_release_build(gitTag)) {
+      storageClass = "STANDARD_IA"
+    }
+    step([
         $class: 'S3BucketPublisher',
         entries: [[
-            sourceFile: "target/universal/marathon-*.tgz",
+            sourceFile: "target/universal/marathon-*.txz",
             bucket: 'marathon-artifacts',
             selectedRegion: 'us-west-2',
             noUploadOnFailure: true,
             managedArtifacts: true,
             flatten: true,
-            showDirectlyInBrowser: false,
+            showDirectlyInBrowser: true,
             keepForever: true,
-        ]],
+            storageClass: storageClass,
+        ],
+        [
+            sourceFile: "target/universal/marathon-*.zip",
+            bucket: 'marathon-artifacts',
+            selectedRegion: 'us-west-2',
+            noUploadOnFailure: true,
+            managedArtifacts: true,
+            flatten: true,
+            showDirectlyInBrowser: true,
+            keepForever: true,
+            storageClass: storageClass,
+        ],
+        ],
         profileName: 'marathon-artifacts',
         dontWaitForConcurrentBuildCompletion: false,
         consoleLogLevel: 'INFO',
         pluginFailureResultConstraint: 'FAILURE'
-    ])*/
+    ])
     sshagent (credentials: ['0f7ec9c9-99b2-4797-9ed5-625572d5931d']) {
       echo "Uploading Artifacts to package server"
       sh """ssh -o StrictHostKeyChecking=no pkgmaintainer@repo1.hw.ca1.mesosphere.com "mkdir -p ~/repo/incoming/marathon-${gitTag}" """

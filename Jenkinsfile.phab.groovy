@@ -68,16 +68,6 @@ ansiColor('gnome-terminal') {
       install_dependencies()
     }
     stage("Checkout D$REVISION_ID($DIFF_ID)") {
-      checkout scm
-      m = load('marathon.groovy')
-    }
-    stage("Package") {
-      m.package_binaries()
-    }
-    stage("Publish Artifacts") {
-      m.publish_artifacts()
-    }
-    /*
       checkout_marathon_master()
       m = load('marathon.groovy')
       m.clean_git()
@@ -156,6 +146,5 @@ ansiColor('gnome-terminal') {
         m.currentBuild.result = "FAILURE"
       }
     }
-    */
   }
 }
