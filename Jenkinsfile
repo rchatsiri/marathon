@@ -38,7 +38,7 @@ node('JenkinsMarathonCI-Debian8-2017-03-21') {
                 --stringparam project_name  $JOB_NAME \
                 --stringparam pipeline_name $BRANCH_NAME \
                 --stringparam build_id $BUILD_ID \
-                --stringparam build_timestamp "$(date +"%Y-%m-%d:%T")" \
+                --stringparam build_timestamp "\$(date +"%Y-%m-%d:%T")" \
                 scripts/unit_tests.xslt \
                 target/scala-2.11/coverage-report/cobertura-unit.xml > target/scala-2.11/coverage-report/cobertura-unit.csv
            """
