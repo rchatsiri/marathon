@@ -34,6 +34,14 @@ node('JenkinsMarathonCI-Debian8-2017-03-21') {
       } finally {
         sh "sudo mv target/scala-2.11/scoverage-report/ target/scala-2.11/scoverage-report-unit"
         sh "sudo mv target/scala-2.11/coverage-report/cobertura.xml target/scala-2.11/coverage-report/cobertura-unit.xml"
+        sh """ xsltproc \
+                --stringparam project_name  $JOB_NAME \
+                --stringparam pipeline_name $BRANCH_NAME \
+                --stringparam build_id $BUILD_ID \
+                --stringparam build_timestamp "$(date +"%Y-%m-%d:%T")" \
+                scripts/unit_tests.xslt \
+                target/scala-2.11/coverage-report/cobertura-unit.xml > target/scala-2.11/coverage-report/cobertura-unit.csv
+           """
         archiveArtifacts(
             artifacts: 'target/**/coverage-report/cobertura-unit.xml, target/**/scoverage-report-unit/**',
             allowEmptyArchive: true)
