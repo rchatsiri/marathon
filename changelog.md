@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 ## Changes from 1.5.x to 1.6.0
 
 ### Breaking changes
@@ -8,7 +7,6 @@
 The Sentry Raven log appender has been updated to version 8.0.x. Users that have enabled the Sentry Raven appender will need to update their configuration according to the [sentry migration guide](https://docs.sentry.io/clients/java/migration/).
 
 ## Changes from 1.5.1 to 1.5.2
-=======
 ## Changes from 1.5.2 to 1.5.3
 Bugfix release
 
