@@ -34,13 +34,13 @@ import scala.util.control.NonFatal
   */
 
 class CuratorElectionService(
-  config: MarathonConf,
-  hostPort: String,
-  system: ActorSystem,
-  override val eventStream: EventStream,
-  lifecycleState: LifecycleState,
-  crashStrategy: CrashStrategy)
-    extends ElectionService with ElectionServiceMetrics with ElectionServiceEventStream with StrictLogging {
+    config: MarathonConf,
+    hostPort: String,
+    system: ActorSystem,
+    override val eventStream: EventStream,
+    lifecycleState: LifecycleState,
+    crashStrategy: CrashStrategy)
+  extends ElectionService with ElectionServiceMetrics with ElectionServiceEventStream with StrictLogging {
 
   system.registerOnTermination {
     logger.info("Stopping leadership on shutdown")

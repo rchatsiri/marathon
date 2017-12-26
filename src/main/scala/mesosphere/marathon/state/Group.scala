@@ -77,15 +77,15 @@ class Group(
   lazy val transitivePods: Iterable[PodDefinition] = transitivePodsIterator().toVector
   lazy val transitivePodIds: Iterable[PathId] = transitivePodIdsIterator().toVector
 
-<<<<<<< HEAD
+  <<<<<<< HEAD
   lazy val transitiveRunSpecs: Iterable[RunSpec] = transitiveApps ++ transitivePods
   lazy val transitiveRunSpecIds: Iterable[PathId] = transitiveAppIds ++ transitivePodIds
-=======
+  =======
   def transitivePods: Set[PodDefinition] = transitivePodsById.values.toSet
 
   lazy val transitiveRunSpecsById: Map[PathId, RunSpec] = transitiveAppsById ++ transitivePodsById
   lazy val transitiveRunSpecs: Set[RunSpec] = transitiveRunSpecsById.values.toSet
->>>>>>> b926c88410a7b8cf0ddda4691372bae47ef80970
+  >>>>>>> b926c88410a7b8cf0ddda4691372bae47ef80970
 
   def transitiveGroups(): Iterator[(Group.GroupKey, Group)] = groupsById.iterator ++ groupsById.valuesIterator.flatMap(_.transitiveGroups())
   lazy val transitiveGroupsById: Map[Group.GroupKey, Group] = {

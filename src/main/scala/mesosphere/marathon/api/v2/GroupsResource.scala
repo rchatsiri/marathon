@@ -274,8 +274,8 @@ class GroupsResource @Inject() (
     deploymentResult(deployment)
   }
 
-<<<<<<< HEAD
-=======
+  <<<<<<< HEAD
+    =======
   private def applyGroupUpdate(
     rootGroup: RootGroup,
     groupId: PathId,
@@ -316,7 +316,7 @@ class GroupsResource @Inject() (
     versionChange.orElse(scaleChange).getOrElse(createOrUpdateChange)
   }
 
->>>>>>> b926c88410a7b8cf0ddda4691372bae47ef80970
+  >>>>>>> b926c88410a7b8cf0ddda4691372bae47ef80970
   private def updateOrCreate(
     id: PathId,
     update: raml.GroupUpdate,
