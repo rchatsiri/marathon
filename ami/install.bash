@@ -33,6 +33,13 @@ apt install -t jessie-backports -y openjdk-8-jdk
 update-java-alternatives -s java-1.8.0-openjdk-amd64
 
 apt-get install -y \
+<<<<<<< HEAD
+=======
+        git \
+        sbt \
+        docker-engine \
+        curl \
+>>>>>>> b926c88410a7b8cf0ddda4691372bae47ef80970
         build-essential \
         curl \
         docker-engine \

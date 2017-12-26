@@ -80,6 +80,7 @@ class ConditionTest extends UnitTest {
       }
     }
   }
+<<<<<<< HEAD
 
   "ConditionFormat" should {
     import play.api.libs.json._
@@ -92,4 +93,6 @@ class ConditionTest extends UnitTest {
       Json.toJson(Condition.Error).as[Condition] shouldBe (Condition.Error)
     }
   }
+=======
+>>>>>>> b926c88410a7b8cf0ddda4691372bae47ef80970
 }

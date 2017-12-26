@@ -114,6 +114,7 @@ class GroupManagerImpl(
 
       val from = rootGroup()
       async {
+<<<<<<< HEAD
         val changedGroup = await(change(from))
         changedGroup match {
           case Left(left) =>
@@ -137,6 +138,28 @@ class GroupManagerImpl(
             root := Option(plan.target)
             Right(plan)
         }
+=======
+        logger.info(s"Upgrade root group version:$version with force:$force")
+
+        val from = rootGroup()
+        val unversioned = AssignDynamicServiceLogic.assignDynamicServicePorts(
+          Range.inclusive(config.localPortMin(), config.localPortMax()),
+          from,
+          change(from))
+        val withVersionedApps = GroupVersioningUtil.updateVersionInfoForChangedApps(version, from, unversioned)
+        val withVersionedAppsPods = GroupVersioningUtil.updateVersionInfoForChangedPods(version, from, withVersionedApps)
+        Validation.validateOrThrow(withVersionedAppsPods)(RootGroup.rootGroupValidator(config.availableFeatures))
+        val plan = DeploymentPlan(from, withVersionedAppsPods, version, toKill)
+        Validation.validateOrThrow(plan)(DeploymentPlan.deploymentPlanValidator())
+        logger.info(s"Computed new deployment plan:\n$plan")
+        await(groupRepository.storeRootVersion(plan.target, plan.createdOrUpdatedApps, plan.createdOrUpdatedPods))
+        await(deploymentService.get().deploy(plan, force))
+        await(groupRepository.storeRoot(plan.target, plan.createdOrUpdatedApps, plan.deletedApps, plan.createdOrUpdatedPods, plan.deletedPods))
+        logger.info(s"Updated groups/apps/pods according to plan ${plan.id}")
+        // finally update the root under the write lock.
+        root := Option(plan.target)
+        plan
+>>>>>>> b926c88410a7b8cf0ddda4691372bae47ef80970
       }
     }
 
@@ -165,12 +188,21 @@ class GroupManagerImpl(
     // propagation of reset group caches on repository is needed,
     // because manager and repository are holding own caches
     await(groupRepository.invalidateGroupCache())
+<<<<<<< HEAD
 
     // force fetching of the root group from the group repository
     rootGroup()
     Done
   }
 
+=======
+
+    // force fetching of the root group from the group repository
+    rootGroup()
+    Done
+  }
+
+>>>>>>> b926c88410a7b8cf0ddda4691372bae47ef80970
   private[this] val metricsRegistered: AtomicBoolean = new AtomicBoolean(false)
   private[this] def registerMetrics(): Unit = {
     if (metricsRegistered.compareAndSet(false, true)) {

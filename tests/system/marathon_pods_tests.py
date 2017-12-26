@@ -162,7 +162,11 @@ def test_remove_pod():
     common.deployment_wait(service_id=pod_id)
 
     try:
+<<<<<<< HEAD
         client.show_pod(pod_id)
+=======
+        _ = client.show_pod(pod_def["id"])
+>>>>>>> b926c88410a7b8cf0ddda4691372bae47ef80970
     except Exception:
         pass
     else:

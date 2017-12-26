@@ -97,8 +97,14 @@ object GroupVersioningUtil {
       newPod.copy(versionInfo = newVersionInfo)
     }
 
+<<<<<<< HEAD
     val updatedTargetPods = to.transitivePods.flatMap { newPod =>
       val updated = updatePodVersionInfo(from.pod(newPod.id), newPod)
+=======
+    val originalPods = from.transitivePodsById
+    val updatedTargetPods = to.transitivePods.flatMap { newPod =>
+      val updated = updatePodVersionInfo(originalPods.get(newPod.id), newPod)
+>>>>>>> b926c88410a7b8cf0ddda4691372bae47ef80970
       if (updated.versionInfo != newPod.versionInfo) Some(updated) else None
     }
     val updatedTo = to.updateVersion(version)

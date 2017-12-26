@@ -62,9 +62,15 @@ class VolumeTest extends UnitTest {
       mount = VolumeMount(None, "cpath", false)
     )
 
+<<<<<<< HEAD
     val secretVol = VolumeWithMount(
       volume = SecretVolume(None, secret = "secret-name"),
       mount = VolumeMount(None, "secret-path", true))
+=======
+    val secretVol = SecretVolume(
+      containerPath = "secret-path",
+      secret = "secret-name")
+>>>>>>> b926c88410a7b8cf0ddda4691372bae47ef80970
   }
   object Fixture extends Fixture
 

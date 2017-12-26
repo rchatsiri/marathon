@@ -40,7 +40,12 @@ def compileAndTest(logFileName: String): Unit = utils.stage("Compile and Test") 
   run("sbt", "plugin-interface/compile")
 
   // Check system integration tests.
+<<<<<<< HEAD
   checkSystemIntegrationTests(logFileName)
+=======
+  // TODO: release 1.5 is not ready for flake8 yet!
+  // checkSystemIntegrationTests(logFileName)
+>>>>>>> b926c88410a7b8cf0ddda4691372bae47ef80970
 }
 
 @main
@@ -156,6 +161,7 @@ def provisionHost(): Unit = utils.stage("Provision") {
   provision.installMesos()
 }
 
+<<<<<<< HEAD
 /**
  * Run the main build pipeline.
  *
@@ -165,11 +171,25 @@ def provisionHost(): Unit = utils.stage("Provision") {
 def build(): String = {
   provisionHost()
 
+=======
+//////////////////// MAIN TARGETS ////////////////////
+
+/**
+ * Run the main build pipeline.
+ *
+ * @return Version of Marathon build.
+ */
+@main
+def build(): String = {
+  provisionHost()
+
+>>>>>>> b926c88410a7b8cf0ddda4691372bae47ef80970
   val logFileName = s"ci-${sys.env.getOrElse("BUILD_TAG", "run")}.log"
   try {
     compileAndTest(logFileName)
   } finally {
     zipLogs(logFileName)    // Try to archive ci and sandbox logs in any case
+<<<<<<< HEAD
   }
 
   val version = createTarballPackages()
@@ -186,9 +206,12 @@ def buildAndTestDockerAndLinuxPackages(): Unit = {
     // create test-bed docker images and run the package tests
     val testPath = pwd/'tests/'package
     %('make, "test")(testPath)
+=======
+>>>>>>> b926c88410a7b8cf0ddda4691372bae47ef80970
   }
 }
 
+<<<<<<< HEAD
 /**
   * Given tagName v1.5.1, and rev DEADBEEF, we would assert that v1.5.0 is a direct ancestor of rev DEADBEEF
   * this ensures that a v1.5.1 release can NOT happen on a branch that had a v1.6.0 release.
@@ -299,6 +322,50 @@ def pr(): Unit = asPullRequest {
 }
 
 /**
+=======
+  val version = createTarballPackages()
+  version
+}
+
+/**
+  * Builds docker and linux native packages, then runs the tests in tests/package/test.sc
+  */
+def buildAndTestDockerAndLinuxPackages(): Unit = {
+  utils.stage("Package Docker Image, Debian and RedHat Packages") {
+    %('sbt, "docker:publishLocal", "packageLinux")
+
+    // create test-bed docker images and run the package tests
+    val testPath = pwd/'tests/'package
+    %('make, "test")(testPath)
+  }
+}
+
+/**
+ * Build target for master and potential release branches.
+ */
+@main
+def master(): Unit = {
+  val version = build()
+  buildAndTestDockerAndLinuxPackages()
+
+  // Uploads
+  uploadTarballPackagesToS3(version, "builds")
+}
+
+/**
+ * Build target for pull request builds.
+ */
+@main
+def pr(): Unit = asPullRequest {
+  val version = build()
+
+  // Uploads
+  val artifact = uploadTarballPackagesToS3(version, "builds")
+  (version, artifact)
+}
+
+/**
+>>>>>>> b926c88410a7b8cf0ddda4691372bae47ef80970
  * Build target for our build loop.
  */
 @main
@@ -328,6 +395,25 @@ def jenkins(): Unit = {
  * @return Version and artifact description of Marathon build.
  */
 @main
+<<<<<<< HEAD
+=======
+def jenkins(): Unit = {
+  if(utils.isPullRequest) pr()
+  else master()
+}
+
+/**
+ * Executes the Community Release which includes:
+ *  1. tarball with version details
+ *  2. release of docker with that version
+ *  3. git tag of version (pushed to server)
+ * @param requestVersion The version attempting to be released v1.4.6
+ * @param gitSha The git commit sha.  This can be shorthand (ex. 0e1)
+ * @param latest Boolean to indicat if the Docker latest should be updated to this version.
+ * @return Version and artifact description of Marathon build.
+ */
+@main
+>>>>>>> b926c88410a7b8cf0ddda4691372bae47ef80970
 def release(requestVersion: String, gitSha: String, latest: Boolean = false): Unit = {
   val releaseVersion = withoutVersionPrefix(requestVersion)
   val tagVersion = s"v$releaseVersion"
@@ -354,6 +440,43 @@ def release(requestVersion: String, gitSha: String, latest: Boolean = false): Un
     %('docker, "push", "mesosphere/marathon:latest")
   } else {
     println("Docker image mesosphere/marathon:latest NOT updated")
+<<<<<<< HEAD
+=======
+  }
+
+  // publishing to the nexus repository.  This artifact is used by metronome.
+  %('sbt, "publish")
+
+  // TODO: git push fails currently b/c jenkins isn't authorized to push to GH
+  // %('git, "push", "--tags")
+
+  // TODO: Publish swagger files.
+}
+
+/**
+  * Given tagName v1.5.1, and rev DEADBEEF, we would assert that v1.5.0 is a direct ancestor of rev DEADBEEF
+  * this ensures that a v1.5.1 release can NOT happen on a branch that had a v1.6.0 release.
+  *
+  * Also, we assert that rev contains new commits since the last release. If the proposal is to tag v1.5.1 with same
+  * revision as v1.5.0, then we fail, saying that there v1.5.0 points to the commit porposed for v1.5.1
+  *
+  * @param tagName The tag name / version we are going to tag. eg v1.5.1
+  * @param gitSha The commit sha / rev that will be tagged.
+  */
+def assertPriorVersionIsAncestor(tagName: String, gitSha: String): Unit = {
+  utils.priorPatchVersion(tagName).foreach { prior =>
+    val revs = %%("git", "rev-list", "--format=oneline", s"${gitSha}..${prior}").out.string
+    if(revs.trim.nonEmpty) {
+      println(s"Error! ${prior} is not a direct ancestor of proposed commit ${gitSha} for ${tagName}!")
+      sys.exit(1)
+    }
+
+    val commitsSinceLast = %%("git", "rev-list", "--format=oneline", s"${prior}..${gitSha}").out.string
+    if(commitsSinceLast.trim.isEmpty) {
+      println(s"Error! ${prior} points to proposed commit ${gitSha} for ${tagName}!")
+      sys.exit(1)
+    }
+>>>>>>> b926c88410a7b8cf0ddda4691372bae47ef80970
   }
 
   // publishing to the nexus repository.  This artifact is used by metronome.
@@ -364,4 +487,56 @@ def release(requestVersion: String, gitSha: String, latest: Boolean = false): Un
   // %('git, "push", "--tags")
 
   // TODO: Publish swagger files.
+}
+
+def withoutVersionPrefix(releaseVersion: String): String = {
+    if(releaseVersion.toLowerCase.startsWith("v"))
+      releaseVersion.substring(1)
+    else
+      releaseVersion
+}
+
+def uploadLinuxPackagesToRepos(tagName: String): Unit = {
+  val pkgserverUser = sys.env.getOrElse("PKG_SSH_USER", {
+    throw new IllegalStateException("PKG_SSH_USER environment variable must be set")
+  })
+  val pkgserverHost = sys.env.getOrElse("PKG_SSH_HOST", {
+    throw new IllegalStateException("PKG_SSH_HOST environment variable must be set")
+  })
+
+  // Note - the key is expected to be provided via an SSH agent
+  utils.printStageTitle(s"Uploading native packages")
+  %("rsync", "-avz",
+    (pwd / 'target / 'packages) + "/",
+    s"${pkgserverUser}@${pkgserverHost}:repo/incoming/marathon-${tagName}/")
+
+  val pkgType = if (tagName.toLowerCase contains "rc")
+    "-testing"
+  else
+    ""
+
+  val mappings = Seq(
+    "systemd" -> s"debian/jessie${pkgType}",
+    "systemd" -> s"ubuntu/yakkety${pkgType}",
+    "systemd" -> s"ubuntu/xenial${pkgType}",
+    "systemd" -> s"ubuntu/wily${pkgType}",
+    "systemd" -> s"ubuntu/vivid${pkgType}",
+    "upstart" -> s"ubuntu/trusty${pkgType}",
+    "upstart" -> s"ubuntu/precise${pkgType}",
+    "systemv" -> s"el${pkgType}/6",
+    "systemd" -> s"el${pkgType}/7")
+
+  val copyCommands = mappings.map { case (packageType, path) =>
+    s"cp $$HOME/repo/incoming/marathon-${tagName}/${packageType}-marathon* " +
+    s"$$HOME/repo/incoming/${path}/"
+  }.mkString(";")
+
+  utils.printStageTitle("Distributing packages to distros")
+  %("ssh", s"${pkgserverUser}@${pkgserverHost}", "bash",
+    "-e", "-x", "-c",
+    utils.escapeCmdArg(List(
+      copyCommands,
+      s"rm -rf $$HOME/repo/incoming/marathon-${tagName}").mkString("\n")))
+
+  utils.printStageTitle("All done")
 }

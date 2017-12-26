@@ -130,7 +130,11 @@ def test_marathon_delete_leader_and_check_apps(marathon_service_name):
     shakedown.deployment_wait()
 
     try:
+<<<<<<< HEAD
         client.get_app(app_id)
+=======
+        _ = client.get_app(app_id)
+>>>>>>> b926c88410a7b8cf0ddda4691372bae47ef80970
     except Exception:
         pass
     else:
@@ -146,7 +150,11 @@ def test_marathon_delete_leader_and_check_apps(marathon_service_name):
 
     # check if app definition is still not there
     try:
+<<<<<<< HEAD
         client.get_app(app_id)
+=======
+        _ = client.get_app(app_id)
+>>>>>>> b926c88410a7b8cf0ddda4691372bae47ef80970
     except Exception:
         pass
     else:

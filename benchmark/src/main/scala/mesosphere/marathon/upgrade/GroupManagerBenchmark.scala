@@ -49,7 +49,11 @@ class GroupBenchmark {
               Some(0),
               Seq("tcp"))))))
 
+<<<<<<< HEAD
   @Param(value = Array("100", "500", "1000", "2500", "5000", "10000"))
+=======
+  @Param(value = Array("100", "500", "1000", "2500", "5000"))
+>>>>>>> b926c88410a7b8cf0ddda4691372bae47ef80970
   var numberOfSavedApps: Int = _
   lazy val ids = 0 until numberOfSavedApps
 

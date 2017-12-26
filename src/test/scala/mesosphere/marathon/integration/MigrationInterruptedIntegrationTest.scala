@@ -9,10 +9,17 @@ import scala.concurrent.Await
 
 @IntegrationTest
 class MigrationInterruptedIntegrationTest
+<<<<<<< HEAD
   extends AkkaIntegrationTest
   with MesosClusterTest
   with ZookeeperServerTest
   with Eventually {
+=======
+    extends AkkaIntegrationTest
+    with MesosClusterTest
+    with ZookeeperServerTest
+    with Eventually {
+>>>>>>> b926c88410a7b8cf0ddda4691372bae47ef80970
 
   "Marathon" should {
     "fail to start if migration was interrupted" in {

@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 ## Changes from 1.5.x to 1.6.0
 
 ### Breaking changes
@@ -7,6 +8,20 @@
 The Sentry Raven log appender has been updated to version 8.0.x. Users that have enabled the Sentry Raven appender will need to update their configuration according to the [sentry migration guide](https://docs.sentry.io/clients/java/migration/).
 
 ## Changes from 1.5.1 to 1.5.2
+=======
+## Changes from 1.5.2 to 1.5.3
+Bugfix release
+
+### Fixed issues
+
+- [MARATHON_EE-1701](https://jira.mesosphere.com/browse/MARATHON_EE-1701) Pods now respect hostname: UNIQUE constraint (#5793)
+- [MARATHON_EE-1768](https://jira.mesosphere.com/browse/MARATHON_EE-1768) Proper reading of secrets from volumes (#5791)
+- [MARATHON_EE-1764](https://jira.mesosphere.com/browse/MARATHON_EE-1764) Speed up service port assignment
+- [MARATHON_EE-1770](https://jira.mesosphere.com/browse/MARATHON_EE-1770) Speed up service port assignment (#5796)
+
+
+## Changes from 1.5.1 to 1.5.2 (unreleased)
+>>>>>>> b926c88410a7b8cf0ddda4691372bae47ef80970
 Bugfix release
 
 ### Fixed issues

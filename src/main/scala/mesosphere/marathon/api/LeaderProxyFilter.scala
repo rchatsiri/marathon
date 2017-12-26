@@ -140,10 +140,17 @@ trait RequestForwarder {
 }
 
 class JavaUrlConnectionRequestForwarder @Inject() (
+<<<<<<< HEAD
     @Named(JavaUrlConnectionRequestForwarder.NAMED_LEADER_PROXY_SSL_CONTEXT) sslContext: SSLContext,
     leaderProxyConf: LeaderProxyConf,
     @Named(ModuleNames.HOST_PORT) myHostPort: String)
   extends RequestForwarder with StrictLogging {
+=======
+  @Named(JavaUrlConnectionRequestForwarder.NAMED_LEADER_PROXY_SSL_CONTEXT) sslContext: SSLContext,
+  leaderProxyConf: LeaderProxyConf,
+  @Named(ModuleNames.HOST_PORT) myHostPort: String)
+    extends RequestForwarder with StrictLogging {
+>>>>>>> b926c88410a7b8cf0ddda4691372bae47ef80970
 
   import JavaUrlConnectionRequestForwarder._
 

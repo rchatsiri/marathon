@@ -388,7 +388,13 @@ class RootGroup(
         pods = group.pods.map { case (podId, pod) => podId -> pod.copy(versionInfo = VersionInfo.NoVersion) },
         groupsById = group.groupsById.map { case (subGroupId, subGroup) => subGroupId -> in(subGroup) },
         dependencies = group.dependencies,
+<<<<<<< HEAD
         version = Timestamp(0))
+=======
+        version = Timestamp(0),
+        transitiveAppsById = group.transitiveAppsById.map { case (appId, app) => appId -> app.copy(versionInfo = VersionInfo.NoVersion) },
+        transitivePodsById = group.transitivePodsById.map { case (podId, pod) => podId -> pod.copy(versionInfo = VersionInfo.NoVersion) })
+>>>>>>> b926c88410a7b8cf0ddda4691372bae47ef80970
     }
     RootGroup.fromGroup(in(this))
   }

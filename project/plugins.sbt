@@ -15,9 +15,16 @@ addSbtPlugin("com.timushev.sbt" % "sbt-updates" % "0.3.3")
 addSbtPlugin("com.thoughtworks.sbt-api-mappings" % "sbt-api-mappings" % "2.0.1")
 addSbtPlugin("com.typesafe.sbt" % "sbt-git" % "0.9.3")
 addSbtPlugin("com.typesafe.sbt" % "sbt-native-packager" % "1.2.2")
+<<<<<<< HEAD
 addSbtPlugin("com.sksamuel.scapegoat" %% "sbt-scapegoat" % "1.0.7")
 addSbtPlugin("pl.project13.scala" % "sbt-jmh" % "0.2.27")
 addSbtPlugin("com.lightbend.sbt" % "sbt-aspectj" % "0.11.0")
+=======
+addSbtPlugin("com.sksamuel.scapegoat" %% "sbt-scapegoat" % "1.0.4")
+addSbtPlugin("de.johoop" % "cpd4sbt" % "1.2.0")
+addSbtPlugin("pl.project13.scala" % "sbt-jmh" % "0.2.25")
+addSbtPlugin("com.typesafe.sbt" % "sbt-aspectj" % "0.10.6")
+>>>>>>> b926c88410a7b8cf0ddda4691372bae47ef80970
 addSbtPlugin("io.get-coursier" % "sbt-coursier" % "1.0.0-RC13")
 
 val JacksonVersion = "2.8.9"
@@ -35,6 +42,7 @@ libraryDependencies ++= Seq(
 
 sbtPlugin := true
 
+<<<<<<< HEAD
 // Needed for sbt-in-sbt.
 scalaVersion := {
   sbtBinaryVersion.value match {
@@ -42,5 +50,7 @@ scalaVersion := {
   }
 }
 
+=======
+>>>>>>> b926c88410a7b8cf0ddda4691372bae47ef80970
 // Needed for jdeb dependency of sbt-native-packager
 classpathTypes += "maven-plugin"

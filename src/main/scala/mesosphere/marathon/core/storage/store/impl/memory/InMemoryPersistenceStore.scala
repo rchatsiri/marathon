@@ -25,9 +25,15 @@ case class RamId(category: String, id: String, version: Option[OffsetDateTime])
 case class Identity(value: Any)
 
 class InMemoryPersistenceStore(implicit
+<<<<<<< HEAD
     protected val mat: Materializer,
     ctx: ExecutionContext)
   extends BasePersistenceStore[RamId, String, Identity] {
+=======
+  protected val mat: Materializer,
+  ctx: ExecutionContext)
+    extends BasePersistenceStore[RamId, String, Identity] {
+>>>>>>> b926c88410a7b8cf0ddda4691372bae47ef80970
 
   val entries = TrieMap[RamId, Identity]()
   val version = Lock(StorageVersions.current.toBuilder)

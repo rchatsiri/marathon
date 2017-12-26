@@ -647,7 +647,10 @@ def add_acs_resource(resource):
             print("Unexpected HTTP error: {}, {}".format(e.response, e.response.text))
             raise
     except Exception:
+<<<<<<< HEAD
         print("Unexpected error:", sys.exc_info()[0])
+=======
+>>>>>>> b926c88410a7b8cf0ddda4691372bae47ef80970
         raise
 
 

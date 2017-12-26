@@ -274,6 +274,49 @@ class GroupsResource @Inject() (
     deploymentResult(deployment)
   }
 
+<<<<<<< HEAD
+=======
+  private def applyGroupUpdate(
+    rootGroup: RootGroup,
+    groupId: PathId,
+    groupUpdate: raml.GroupUpdate,
+    newVersion: Timestamp)(implicit identity: Identity): RootGroup = {
+    val group = rootGroup.group(groupId).getOrElse(Group.empty(groupId))
+
+    /**
+      * roll back to a previous group version
+      */
+    def versionChange: Option[RootGroup] = groupUpdate.version.map { version =>
+      val targetVersion = Timestamp(version)
+      checkAuthorization(UpdateGroup, group)
+      val versionedGroup = result(groupManager.group(group.id, targetVersion))
+        .map(checkAuthorization(ViewGroup, _))
+      rootGroup.putGroup(versionedGroup.getOrElse(
+        throw new IllegalArgumentException(s"Group $group.id not available in version $targetVersion")
+      ), newVersion)
+    }
+
+    def scaleChange: Option[RootGroup] = groupUpdate.scaleBy.map { scale =>
+      checkAuthorization(UpdateGroup, group)
+      rootGroup.updateTransitiveApps(group.id, app => app.copy(instances = (app.instances * scale).ceil.toInt), newVersion)
+    }
+
+    def createOrUpdateChange: RootGroup = {
+      // groupManager.update always passes a group, even if it doesn't exist
+      val maybeExistingGroup = groupManager.group(group.id)
+      val appConversionFunc: (raml.App => AppDefinition) = Raml.fromRaml[raml.App, AppDefinition]
+      val updatedGroup: Group = Raml.fromRaml(
+        GroupConversion(groupUpdate, group, newVersion) -> appConversionFunc)
+
+      maybeExistingGroup.fold(checkAuthorization(UpdateGroup, updatedGroup))(checkAuthorization(UpdateGroup, _))
+
+      rootGroup.putGroup(updatedGroup, newVersion)
+    }
+
+    versionChange.orElse(scaleChange).getOrElse(createOrUpdateChange)
+  }
+
+>>>>>>> b926c88410a7b8cf0ddda4691372bae47ef80970
   private def updateOrCreate(
     id: PathId,
     update: raml.GroupUpdate,

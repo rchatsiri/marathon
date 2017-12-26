@@ -79,11 +79,19 @@ object Dependencies {
 object Dependency {
   object V {
     // runtime deps versions
+<<<<<<< HEAD
     val Aws = "1.11.243"
     val Alpakka  = "0.14"
     val Chaos = "0.10.0"
     val Guava = "20.0"
     val Mesos = "1.5.0-SNAPSHOT"
+=======
+    val Aws = "1.11.129"
+    val Alpakka  = "0.8"
+    val Chaos = "0.8.8"
+    val Guava = "19.0"
+    val Mesos = "1.4.0"
+>>>>>>> b926c88410a7b8cf0ddda4691372bae47ef80970
     // Version of Mesos to use in Dockerfile.
     val MesosDebian = "1.4.0-2.0.1"
     val OpenJDK = "openjdk:8u121-jdk"

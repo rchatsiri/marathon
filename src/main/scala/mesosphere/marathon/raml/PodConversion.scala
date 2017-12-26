@@ -54,7 +54,11 @@ trait PodConversion extends NetworkConversion with ConstraintConversion with Con
       instances = instances,
       constraints = constraints,
       versionInfo = state.VersionInfo.OnlyVersion(podd.version.fold(Timestamp.now())(Timestamp(_))),
+<<<<<<< HEAD
       volumes = podd.volumes.map(Raml.fromRaml(_)),
+=======
+      podVolumes = podd.volumes.map(Raml.fromRaml(_)),
+>>>>>>> b926c88410a7b8cf0ddda4691372bae47ef80970
       networks = networks,
       backoffStrategy = backoffStrategy,
       upgradeStrategy = upgradeStrategy,

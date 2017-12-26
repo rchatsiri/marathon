@@ -93,8 +93,28 @@ def reportSuccess(
     |$buildinfoDiff
     |
     |You can run system integration test changes of this PR against Marathon
+<<<<<<< HEAD
     |master by triggering [this Jenkins job](https://jenkins.mesosphere.com/service/jenkins/view/Marathon/job/system-integration-tests/job/marathon-si-pr/build?delay=0sec) with the `Pull_Request_id` `$pullNumber`.
     |The job then reports back to this PR.
+=======
+    |master by tirggering [this Jenkins job](https://jenkins.mesosphere.com/service/jenkins/view/Marathon/job/system-integration-tests/job/marathon-si-pr/build?delay=0sec) with the `Pull_Request_id` `$pullNumber`.
+    |The job then reports back to this PR.
+    |
+    |""".stripMargin
+
+  if (!hasUnsoundTests) {
+    msg += "**＼\\ ٩( ᐛ )و /／**"
+  } else {
+    val unsoundTestsList: String = unsoundTests.foldLeft("") { (msg:String, test: Js.Obj) =>
+      msg + s"""\n- `${test("name").value}`"""
+    }
+
+    msg += s"""
+    |The following tests failed and have been marked as canceled. Are you sure you want to land this patch?
+    | $unsoundTestsList
+    |
+    |Anyhow, check the [skipped tests]($buildUrl/testReport) on Jenkins for details and decide for yourself.
+>>>>>>> b926c88410a7b8cf0ddda4691372bae47ef80970
     |
     |**＼\\ ٩( ᐛ )و /／**
     |""".stripMargin

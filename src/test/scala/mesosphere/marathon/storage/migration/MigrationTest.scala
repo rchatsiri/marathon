@@ -143,7 +143,7 @@ class MigrationTest extends AkkaUnitTest with Mockito with GivenWhenThen with Ev
       }
 
       Then("Migration exits with a readable error message")
-      ex.getMessage should equal (s"Migration from versions < ${minVersion.str} are not supported. Your version: ${unsupportedVersion.str}")
+      ex.getMessage should equal(s"Migration from versions < ${minVersion.str} are not supported. Your version: ${unsupportedVersion.str}")
     }
 
     "migrate throws an error for versions > current" in {
@@ -164,7 +164,7 @@ class MigrationTest extends AkkaUnitTest with Mockito with GivenWhenThen with Ev
       }
 
       Then("Migration exits with a readable error message")
-      ex.getMessage should equal (s"Migration from ${unsupportedVersion.str} is not supported as it is newer than ${StorageVersions.current.str}.")
+      ex.getMessage should equal(s"Migration from ${unsupportedVersion.str} is not supported as it is newer than ${StorageVersions.current.str}.")
     }
 
     "migrations are executed sequentially" in {
@@ -191,7 +191,7 @@ class MigrationTest extends AkkaUnitTest with Mockito with GivenWhenThen with Ev
       migrate.groupRepository.storeRoot(any, any, any, any, any) returns Future.successful(Done)
       migrate.serviceDefinitionRepo.getVersions(any) returns Source.empty
       val result = migrate.migrate()
-      result should be ('nonEmpty)
+      result should be('nonEmpty)
       result should contain theSameElementsInOrderAs migrate.migrations.map(_._1)
     }
 
@@ -228,7 +228,9 @@ class MigrationTest extends AkkaUnitTest with Mockito with GivenWhenThen with Ev
 
       migrationDone.success(Done)
 
-      eventually { f.scheduler.taskCount shouldBe 0 }
+      eventually {
+        f.scheduler.taskCount shouldBe 0
+      }
       result.futureValue shouldBe List(version)
     }
 

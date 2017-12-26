@@ -65,6 +65,7 @@ trait DeploymentService {
   * Wrapper class for the scheduler
   */
 class MarathonSchedulerService @Inject() (
+<<<<<<< HEAD
     persistenceStore: PersistenceStore[_, _, _],
     leadershipCoordinator: LeadershipCoordinator,
     config: MarathonConf,
@@ -78,6 +79,21 @@ class MarathonSchedulerService @Inject() (
     @Named("schedulerActor") schedulerActor: ActorRef,
     @Named(ModuleNames.MESOS_HEARTBEAT_ACTOR) mesosHeartbeatActor: ActorRef)(implicit mat: Materializer)
   extends AbstractExecutionThreadService with ElectionCandidate with DeploymentService {
+=======
+  persistenceStore: PersistenceStore[_, _, _],
+  leadershipCoordinator: LeadershipCoordinator,
+  config: MarathonConf,
+  electionService: ElectionService,
+  prePostDriverCallbacks: Seq[PrePostDriverCallback],
+  groupManager: GroupManager,
+  driverFactory: SchedulerDriverFactory,
+  system: ActorSystem,
+  migration: Migration,
+  deploymentManager: DeploymentManager,
+  @Named("schedulerActor") schedulerActor: ActorRef,
+  @Named(ModuleNames.MESOS_HEARTBEAT_ACTOR) mesosHeartbeatActor: ActorRef)(implicit mat: Materializer)
+    extends AbstractExecutionThreadService with ElectionCandidate with DeploymentService {
+>>>>>>> b926c88410a7b8cf0ddda4691372bae47ef80970
 
   import mesosphere.marathon.core.async.ExecutionContexts.global
 

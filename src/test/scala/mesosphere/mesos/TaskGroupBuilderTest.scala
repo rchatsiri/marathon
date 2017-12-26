@@ -7,13 +7,21 @@ import mesosphere.marathon.core.pod._
 import mesosphere.marathon.core.task.Task
 import mesosphere.marathon.plugin.task.RunSpecTaskProcessor
 import mesosphere.marathon.plugin.{ ApplicationSpec, PodSpec }
+<<<<<<< HEAD
 import mesosphere.marathon.raml
 import mesosphere.marathon.raml.{ Endpoint, Resources, Lifecycle }
+=======
+import mesosphere.marathon.{ AllConf, raml }
+import mesosphere.marathon.raml.{ Endpoint, Lifecycle, Resources }
+>>>>>>> b926c88410a7b8cf0ddda4691372bae47ef80970
 import mesosphere.marathon.state.PathId._
 import mesosphere.marathon.state._
 import mesosphere.marathon.stream.Implicits._
 import mesosphere.marathon.test.{ MarathonTestHelper, SettableClock }
+<<<<<<< HEAD
 import mesosphere.marathon.AllConf
+=======
+>>>>>>> b926c88410a7b8cf0ddda4691372bae47ef80970
 import org.apache.mesos.Protos.{ ExecutorInfo, TaskGroupInfo, TaskInfo }
 import org.apache.mesos.{ Protos => mesos }
 import org.scalatest.Inside
@@ -1137,6 +1145,7 @@ class TaskGroupBuilderTest extends UnitTest with Inside {
         lifecycle = Some(Lifecycle(Some(killDuration.toSeconds))))
 
       val podSpec = PodDefinition(id = PathId("/tty"), containers = Seq(container))
+<<<<<<< HEAD
       val instanceId = Instance.Id.forRunSpec(podSpec.id)
       val taskIds = podSpec.containers.map(c => Task.Id.forInstanceId(instanceId, Some(c)))
       val resourceMatch = RunSpecOfferMatcher.matchOffer(podSpec, offer, Nil,
@@ -1150,6 +1159,16 @@ class TaskGroupBuilderTest extends UnitTest with Inside {
         RunSpecTaskProcessor.empty,
         resourceMatch.asInstanceOf[ResourceMatchResponse.Match].resourceMatch,
         None
+=======
+      val resourceMatch = RunSpecOfferMatcher.matchOffer(podSpec, offer, Seq.empty, defaultBuilderConfig.acceptedResourceRoles)
+      val (_, taskGroupInfo, _, _) = TaskGroupBuilder.build(
+        podSpec,
+        offer,
+        s => Instance.Id.forRunSpec(s),
+        defaultBuilderConfig,
+        RunSpecTaskProcessor.empty,
+        resourceMatch.asInstanceOf[ResourceMatchResponse.Match].resourceMatch
+>>>>>>> b926c88410a7b8cf0ddda4691372bae47ef80970
       )
 
       taskGroupInfo.getTasks(0).getKillPolicy.getGracePeriod.getNanoseconds shouldBe (killDuration.toNanos)

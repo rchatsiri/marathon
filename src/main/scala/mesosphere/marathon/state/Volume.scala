@@ -26,12 +26,23 @@ object Volume {
         persistent = PersistentVolumeInfo.fromProto(proto.getPersistent))
     else if (proto.hasExternal)
       ExternalVolume(
+<<<<<<< HEAD
         name = name,
         external = ExternalVolumeInfo.fromProto(proto.getExternal))
     else if (proto.hasSecret)
       SecretVolume(
         name = name,
         secret = proto.getSecret.getSecret)
+=======
+        containerPath = proto.getContainerPath,
+        external = ExternalVolumeInfo.fromProto(proto.getExternal),
+        mode = proto.getMode
+      )
+    else if (proto.hasSecret)
+      SecretVolume(
+        proto.getContainerPath,
+        proto.getSecret.getSecret)
+>>>>>>> b926c88410a7b8cf0ddda4691372bae47ef80970
     else
       HostVolume(
         name = name,

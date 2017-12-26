@@ -1,7 +1,12 @@
 #!/usr/bin/env groovy
 
+<<<<<<< HEAD
 ansiColor('xterm') {
   node('JenkinsMarathonCI-Debian8-2017-10-23') {
+=======
+ansiColor('gnome-terminal') {
+  node('JenkinsMarathonCI-Debian8-2017-10-06') {
+>>>>>>> b926c88410a7b8cf0ddda4691372bae47ef80970
     stage("Run Pipeline") {
       try {
         checkout scm
@@ -15,6 +20,7 @@ ansiColor('xterm') {
       } finally {
         junit(allowEmptyResults: true, testResults: 'target/test-reports/*.xml')
         junit allowEmptyResults: true, testResults: 'target/test-reports/*integration/*.xml'
+<<<<<<< HEAD
         publishHTML([
             allowMissing: true, alwaysLinkToLastBuild: false, keepAll: true,
             reportDir: 'target/scala-2.12/scapegoat-report', reportFiles: 'scapegoat.html',
@@ -23,6 +29,11 @@ ansiColor('xterm') {
         archive includes: "sandboxes.tar.gz"
         archive includes: "ci-${env.BUILD_TAG}.log.tar.gz"
         archive includes: "ci-${env.BUILD_TAG}.log"  // Only in case the build was  aborted and the logs weren't zipped
+=======
+        archive includes: 'sandboxes.tar.gz'
+        archive includes: 'ci.tar.gz'
+        archive includes: 'ci.log'  // Only in case the build was  aborted and the logs weren't zipped
+>>>>>>> b926c88410a7b8cf0ddda4691372bae47ef80970
       }
     }
   }

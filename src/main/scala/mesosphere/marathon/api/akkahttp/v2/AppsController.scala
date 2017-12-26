@@ -26,6 +26,7 @@ import mesosphere.marathon.core.group.GroupManager
 import mesosphere.marathon.core.health.HealthCheckManager
 import mesosphere.marathon.core.instance.Instance
 import mesosphere.marathon.core.plugin.PluginManager
+<<<<<<< HEAD
 import mesosphere.marathon.core.task.Task.{ Id => TaskId }
 import mesosphere.marathon.core.task.tracker.InstanceTracker
 import mesosphere.marathon.core.task.tracker.InstanceTracker.InstancesBySpec
@@ -34,6 +35,10 @@ import mesosphere.marathon.raml.TaskConversion._
 import mesosphere.marathon.raml.{ AnyToRaml, AppUpdate, DeploymentResult, VersionList }
 import mesosphere.marathon.state._
 import mesosphere.marathon.stream.Sink
+=======
+import mesosphere.marathon.plugin.auth.{ Authorizer, CreateRunSpec, Identity, ViewResource, ViewRunSpec, Authenticator => MarathonAuthenticator }
+import mesosphere.marathon.state.{ AppDefinition, Identifiable, PathId }
+>>>>>>> b926c88410a7b8cf0ddda4691372bae47ef80970
 import play.api.libs.json.Json
 import PathMatchers.forceParameter
 import mesosphere.marathon.plugin.auth.AuthorizedResource.SystemConfig

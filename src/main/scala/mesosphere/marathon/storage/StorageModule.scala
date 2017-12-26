@@ -12,7 +12,11 @@ import mesosphere.marathon.storage.repository._
 
 import scala.collection.immutable.Seq
 import scala.concurrent.ExecutionContext
+<<<<<<< HEAD
 //import scala.language.existentials
+=======
+import scala.language.existentials
+>>>>>>> b926c88410a7b8cf0ddda4691372bae47ef80970
 
 /**
   * Provides the repositories for all persistable entities.
@@ -120,6 +124,7 @@ object StorageModule {
 }
 
 private[storage] case class StorageModuleImpl(
+<<<<<<< HEAD
     persistenceStore: PersistenceStore[_, _, _],
     instanceRepository: InstanceRepository,
     deploymentRepository: DeploymentRepository,
@@ -130,4 +135,16 @@ private[storage] case class StorageModuleImpl(
     migration: Migration,
     leadershipInitializers: Seq[PrePostDriverCallback],
     persistentStoreBackup: PersistentStoreBackup
+=======
+  persistenceStore: PersistenceStore[_, _, _],
+  instanceRepository: InstanceRepository,
+  deploymentRepository: DeploymentRepository,
+  taskFailureRepository: TaskFailureRepository,
+  groupRepository: GroupRepository,
+  frameworkIdRepository: FrameworkIdRepository,
+  runtimeConfigurationRepository: RuntimeConfigurationRepository,
+  migration: Migration,
+  leadershipInitializers: Seq[PrePostDriverCallback],
+  persistentStoreBackup: PersistentStoreBackup
+>>>>>>> b926c88410a7b8cf0ddda4691372bae47ef80970
 ) extends StorageModule

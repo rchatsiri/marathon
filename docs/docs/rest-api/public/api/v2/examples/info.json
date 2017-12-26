@@ -4,6 +4,7 @@
   "buildref": "unknown",
   "elected": true,
   "leader": "localhost:8080",
+<<<<<<< HEAD
   "frameworkId": "96d7da70-b731-4cfb-96a7-0ee877af615d-0000",
   "marathon_config": {
     "access_control_allow_origin": ["*"],
@@ -11,6 +12,15 @@
     "decline_offer_duration": 120000,
     "default_network_name": "container-network",
     "env_vars_prefix": "APP",
+=======
+  "frameworkId": "74ad0643-c84d-42eb-8e8b-a7425e28a814-0000",
+  "marathon_config": {
+    "access_control_allow_origin": null,
+    "checkpoint": true,
+    "decline_offer_duration": 120000,
+    "default_network_name": null,
+    "env_vars_prefix": null,
+>>>>>>> b926c88410a7b8cf0ddda4691372bae47ef80970
     "executor": "//cmd",
     "failover_timeout": 604800,
     "features": [],
@@ -46,7 +56,11 @@
     "task_lost_expunge_initial_delay": 300000,
     "task_lost_expunge_interval": 30000,
     "task_reservation_timeout": 20000,
+<<<<<<< HEAD
     "webui_url": "http://localhost:8080"
+=======
+    "webui_url": null
+>>>>>>> b926c88410a7b8cf0ddda4691372bae47ef80970
   },
   "zookeeper_config": {
     "zk": "zk://localhost:2181/marathon",

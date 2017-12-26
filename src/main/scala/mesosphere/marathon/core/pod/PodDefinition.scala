@@ -25,6 +25,10 @@ case class PodDefinition(
     instances: Int = PodDefinition.DefaultInstances,
     constraints: Set[Protos.Constraint] = PodDefinition.DefaultConstraints,
     versionInfo: VersionInfo = VersionInfo.OnlyVersion(PodDefinition.DefaultVersion),
+<<<<<<< HEAD
+=======
+    podVolumes: Seq[Volume] = PodDefinition.DefaultVolumes,
+>>>>>>> b926c88410a7b8cf0ddda4691372bae47ef80970
     networks: Seq[Network] = PodDefinition.DefaultNetworks,
     backoffStrategy: BackoffStrategy = PodDefinition.DefaultBackoffStrategy,
     upgradeStrategy: UpgradeStrategy = PodDefinition.DefaultUpgradeStrategy,
