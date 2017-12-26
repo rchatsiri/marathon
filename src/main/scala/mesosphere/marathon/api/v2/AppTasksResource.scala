@@ -6,10 +6,10 @@ import javax.servlet.http.HttpServletRequest
 import javax.ws.rs._
 import javax.ws.rs.core.{ Context, MediaType, Response }
 
-import com.codahale.metrics.annotation.Timed
+import mesosphere.marathon.api.EndpointsHelper.ListTasks
 import mesosphere.marathon.api._
-import mesosphere.marathon.api.v2.json.Formats._
 import mesosphere.marathon.core.appinfo.EnrichedTask
+import mesosphere.marathon.core.async.ExecutionContexts.global
 import mesosphere.marathon.core.group.GroupManager
 import mesosphere.marathon.core.health.HealthCheckManager
 import mesosphere.marathon.core.instance.Instance
@@ -17,13 +17,15 @@ import mesosphere.marathon.core.task.Task
 import mesosphere.marathon.core.task.tracker.InstanceTracker
 import mesosphere.marathon.core.task.tracker.InstanceTracker.InstancesBySpec
 import mesosphere.marathon.plugin.auth._
+import mesosphere.marathon.raml.AnyToRaml
+import mesosphere.marathon.raml.Task._
+import mesosphere.marathon.raml.TaskConversion._
 import mesosphere.marathon.state.PathId
 import mesosphere.marathon.state.PathId._
 import org.slf4j.LoggerFactory
 
 import scala.async.Async._
 import scala.concurrent.Future
-import scala.concurrent.ExecutionContext.Implicits.global
 
 @Consumes(Array(MediaType.APPLICATION_JSON))
 @Produces(Array(MarathonMediaType.PREFERRED_APPLICATION_JSON))
@@ -40,7 +42,6 @@ class AppTasksResource @Inject() (
   val GroupTasks = """^((?:.+/)|)\*$""".r
 
   @GET
-  @Timed
   @SuppressWarnings(Array("all")) /* async/await */
   def indexJson(
     @PathParam("appId") id: String,
@@ -50,22 +51,22 @@ class AppTasksResource @Inject() (
       id match {
         case GroupTasks(gid) =>
           val groupPath = gid.toRootPath
-          val maybeGroup = await(groupManager.group(groupPath))
+          val maybeGroup = groupManager.group(groupPath)
           withAuthorization(ViewGroup, maybeGroup, unknownGroup(groupPath)) { group =>
-            ok(jsonObjString("tasks" -> runningTasks(group.transitiveAppIds, instancesBySpec)))
+            ok(jsonObjString("tasks" -> runningTasks(group.transitiveAppIds, instancesBySpec).toRaml))
           }
         case _ =>
           val appId = id.toRootPath
-          val maybeApp = await(groupManager.app(appId))
+          val maybeApp = groupManager.app(appId)
           withAuthorization(ViewRunSpec, maybeApp, unknownApp(appId)) { _ =>
-            ok(jsonObjString("tasks" -> runningTasks(Set(appId), instancesBySpec)))
+            ok(jsonObjString("tasks" -> runningTasks(Set(appId), instancesBySpec).toRaml))
           }
       }
     }
     result(tasksResponse)
   }
 
-  def runningTasks(appIds: Set[PathId], instancesBySpec: InstancesBySpec): Set[EnrichedTask] = {
+  def runningTasks(appIds: Iterable[PathId], instancesBySpec: InstancesBySpec): Vector[EnrichedTask] = {
     appIds.withFilter(instancesBySpec.hasSpecInstances).flatMap { id =>
       val health = result(healthCheckManager.statuses(id))
       instancesBySpec.specInstances(id).flatMap { instance =>
@@ -73,12 +74,11 @@ class AppTasksResource @Inject() (
           EnrichedTask(id, task, instance.agentInfo, health.getOrElse(instance.instanceId, Nil))
         }
       }
-    }
+    }(collection.breakOut)
   }
 
   @GET
   @Produces(Array(MediaType.TEXT_PLAIN))
-  @Timed
   @SuppressWarnings(Array("all")) /* async/await */
   def indexTxt(
     @PathParam("appId") appId: String,
@@ -86,14 +86,14 @@ class AppTasksResource @Inject() (
     val id = appId.toRootPath
     result(async {
       val instancesBySpec = await(instanceTracker.instancesBySpec)
-      withAuthorization(ViewRunSpec, await(groupManager.app(id)), unknownApp(id)) { app =>
-        ok(EndpointsHelper.appsToEndpointString(instancesBySpec, Seq(app), "\t"))
+      withAuthorization(ViewRunSpec, groupManager.app(id), unknownApp(id)) { app =>
+        ok(EndpointsHelper.appsToEndpointString(ListTasks(instancesBySpec, Seq(app))))
       }
     })
   }
 
   @DELETE
-  @Timed
+  @SuppressWarnings(Array("all")) // async/await
   def deleteMany(
     @PathParam("appId") appId: String,
     @QueryParam("host") host: String,
@@ -115,15 +115,26 @@ class AppTasksResource @Inject() (
       val deploymentF = taskKiller.killAndScale(pathId, findToKill, force)
       deploymentResult(result(deploymentF))
     } else {
-      reqToResponse(taskKiller.kill(pathId, findToKill, wipe)) {
-        tasks => ok(jsonObjString("tasks" -> tasks))
+      val response: Future[Response] = async {
+        val instances = await(taskKiller.kill(pathId, findToKill, wipe))
+        val healthStatuses = await(healthCheckManager.statuses(pathId))
+        val enrichedTasks: Seq[EnrichedTask] = instances.map { instance =>
+          val killedTask = instance.appTask
+          val enrichedTask = EnrichedTask(pathId, killedTask, instance.agentInfo, healthStatuses.getOrElse(instance.instanceId, Nil))
+          enrichedTask
+        }
+        ok(jsonObjString("tasks" -> enrichedTasks.toRaml))
+      }.recover {
+        case PathNotFoundException(appId, version) => unknownApp(appId, version)
       }
+
+      result(response)
     }
   }
 
   @DELETE
   @Path("{taskId}")
-  @Timed
+  @SuppressWarnings(Array("all")) // async/await
   def deleteOne(
     @PathParam("appId") appId: String,
     @PathParam("taskId") id: String,
@@ -148,20 +159,22 @@ class AppTasksResource @Inject() (
       val deploymentF = taskKiller.killAndScale(pathId, findToKill, force)
       deploymentResult(result(deploymentF))
     } else {
-      reqToResponse(taskKiller.kill(pathId, findToKill, wipe)) {
-        tasks => tasks.headOption.fold(unknownTask(id))(task => ok(jsonObjString("task" -> task)))
+      val response: Future[Response] = async {
+        val instances = await(taskKiller.kill(pathId, findToKill, wipe))
+        val healthStatuses = await(healthCheckManager.statuses(pathId))
+        instances.headOption match {
+          case None =>
+            unknownTask(id)
+          case Some(instance) =>
+            val killedTask = instance.appTask
+            val enrichedTask = EnrichedTask(pathId, killedTask, instance.agentInfo, healthStatuses.getOrElse(instance.instanceId, Nil))
+            ok(jsonObjString("task" -> enrichedTask.toRaml))
+        }
+      }.recover {
+        case PathNotFoundException(appId, version) => unknownApp(appId, version)
       }
+
+      result(response)
     }
   }
-
-  private def reqToResponse(
-    future: Future[Seq[Instance]])(toResponse: Seq[Instance] => Response): Response = {
-    val response = future.map { tasks =>
-      toResponse(tasks)
-    } recover {
-      case PathNotFoundException(appId, version) => unknownApp(appId, version)
-    }
-    result(response)
-  }
-
 }

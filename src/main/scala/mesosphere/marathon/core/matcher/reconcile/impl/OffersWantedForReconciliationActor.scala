@@ -1,13 +1,15 @@
-package mesosphere.marathon.core.matcher.reconcile.impl
+package mesosphere.marathon
+package core.matcher.reconcile.impl
+
+import java.time.Clock
 
 import akka.actor.{ Actor, Cancellable, Props }
 import akka.event.{ EventStream, LoggingReceive }
-import mesosphere.marathon.core.base.Clock
+import com.typesafe.scalalogging.StrictLogging
 import mesosphere.marathon.core.flow.ReviveOffersConfig
 import mesosphere.marathon.core.event.DeploymentStepSuccess
 import mesosphere.marathon.state.Timestamp
-import mesosphere.marathon.upgrade.StopApplication
-import org.slf4j.LoggerFactory
+import mesosphere.marathon.core.deployment.StopApplication
 import rx.lang.scala.Observer
 
 import scala.concurrent.duration._
@@ -38,8 +40,7 @@ private[reconcile] class OffersWantedForReconciliationActor(
     reviveOffersConfig: ReviveOffersConfig,
     clock: Clock,
     eventStream: EventStream,
-    offersWanted: Observer[Boolean]) extends Actor {
-  private[this] val log = LoggerFactory.getLogger(getClass)
+    offersWanted: Observer[Boolean]) extends Actor with StrictLogging {
 
   /** Make certain that the normal number of revives that the user specified will be executed. */
   private[this] val interestDuration =
@@ -50,7 +51,7 @@ private[reconcile] class OffersWantedForReconciliationActor(
 
     eventStream.subscribe(self, classOf[DeploymentStepSuccess])
 
-    log.info(s"Started. Will remain interested in offer reconciliation for $interestDuration when needed.")
+    logger.info(s"Started. Will remain interested in offer reconciliation for $interestDuration when needed.")
     self ! OffersWantedForReconciliationActor.RequestOffers("becoming leader")
   }
 
@@ -65,7 +66,7 @@ private[reconcile] class OffersWantedForReconciliationActor(
   private[this] def handleRequestOfferIndicators: Receive = {
     case success: DeploymentStepSuccess =>
       val terminatedResidentApps = success.currentStep.actions.view.collect {
-        case StopApplication(app) if app.residency.isDefined => app
+        case StopApplication(app) if app.isResident => app
       }
 
       if (terminatedResidentApps.nonEmpty) {
@@ -80,7 +81,7 @@ private[reconcile] class OffersWantedForReconciliationActor(
     val nextCheck = scheduleNextCheck
     offersWanted.onNext(true)
     val until: Timestamp = clock.now() + interestDuration
-    log.info(s"interested in offers for reservation reconciliation because of $reason (until $until)")
+    logger.info(s"interested in offers for reservation reconciliation because of $reason (until $until)")
     subscribedToOffers(until, nextCheck)
   }
 
@@ -106,7 +107,7 @@ private[reconcile] class OffersWantedForReconciliationActor(
 
   private[this] def unsubscribedToOffers: Receive = LoggingReceive.withLabel("unsubscribedToOffers") {
     offersWanted.onNext(false)
-    log.info("no interest in offers for reservation reconciliation anymore.")
+    logger.info("no interest in offers for reservation reconciliation anymore.")
 
     handleRequestOfferIndicators orElse {
       case OffersWantedForReconciliationActor.RecheckInterest => //ignore

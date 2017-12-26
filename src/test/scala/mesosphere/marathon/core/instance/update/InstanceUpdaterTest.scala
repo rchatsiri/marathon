@@ -2,7 +2,7 @@ package mesosphere.marathon
 package core.instance.update
 
 import mesosphere.UnitTest
-import mesosphere.marathon.core.base.ConstantClock
+import mesosphere.marathon.test.SettableClock
 import mesosphere.marathon.core.condition.Condition
 import mesosphere.marathon.core.event.{ InstanceChanged, MesosStatusUpdateEvent }
 import mesosphere.marathon.core.instance.Instance.{ AgentInfo, InstanceState }
@@ -12,7 +12,7 @@ import mesosphere.marathon.core.task.Task
 import mesosphere.marathon.core.task.bus.{ MesosTaskStatusTestHelper, TaskStatusUpdateTestHelper }
 import mesosphere.marathon.core.task.state.NetworkInfoPlaceholder
 import mesosphere.marathon.raml.Resources
-import mesosphere.marathon.state.{ PathId, UnreachableStrategy }
+import mesosphere.marathon.state.{ PathId, UnreachableEnabled, UnreachableStrategy }
 import org.apache.mesos.Protos.TaskState.TASK_UNREACHABLE
 
 import scala.concurrent.duration._
@@ -63,7 +63,7 @@ class InstanceUpdaterTest extends UnitTest {
 
     "processing an expired unreachable" should {
       val f = new Fixture
-      val unreachableInactiveAfter = f.instance.unreachableStrategy.inactiveAfter
+      val unreachableInactiveAfter = f.instance.unreachableStrategy.asInstanceOf[UnreachableEnabled].inactiveAfter
       val newMesosStatus = MesosTaskStatusTestHelper.unreachable(f.taskId, since = f.clock.now())
 
       // Forward time to expire unreachable status
@@ -192,7 +192,7 @@ class InstanceUpdaterTest extends UnitTest {
       val unreachableStatus = f.taskStatus.copy(startedAt = None, condition = Condition.Unreachable, mesosStatus = Some(mesosTaskStatus))
       val unreachableTask = f.task.copy(status = unreachableStatus)
       val unreachableState = f.instanceState.copy(condition = Condition.Unreachable)
-      val unreachableStrategy = UnreachableStrategy(inactiveAfter = 30.minutes, expungeAfter = 1.hour)
+      val unreachableStrategy = UnreachableEnabled(inactiveAfter = 30.minutes, expungeAfter = 1.hour)
       val unreachableInstance = f.instance.copy(
         tasksMap = Map(f.taskId -> unreachableTask),
         state = unreachableState,
@@ -218,7 +218,7 @@ class InstanceUpdaterTest extends UnitTest {
       val unreachableStatus = f.taskStatus.copy(startedAt = None, condition = Condition.Unreachable, mesosStatus = Some(mesosTaskStatus))
       val unreachableTask = f.task.copy(status = unreachableStatus)
       val unreachableInactiveState = f.instanceState.copy(condition = Condition.UnreachableInactive)
-      val unreachableStrategy = UnreachableStrategy(inactiveAfter = 1.minute, expungeAfter = 1.hour)
+      val unreachableStrategy = UnreachableEnabled(inactiveAfter = 1.minute, expungeAfter = 1.hour)
       val unreachableInactiveInstance = f.instance.copy(
         tasksMap = Map(f.taskId -> unreachableTask),
         state = unreachableInactiveState,
@@ -291,9 +291,9 @@ class InstanceUpdaterTest extends UnitTest {
       name = "container2",
       resources = Resources()
     )
-    val clock = ConstantClock()
+    val clock = new SettableClock()
 
-    val agentInfo = AgentInfo("localhost", None, Seq.empty)
+    val agentInfo = AgentInfo("localhost", None, None, None, Seq.empty)
     val instanceState = InstanceState(Condition.Running, clock.now(), Some(clock.now()), None)
     val taskId: Task.Id = Task.Id("uniq")
     val mesosTaskStatus = MesosTaskStatusTestHelper.runningHealthy(taskId)
@@ -305,6 +305,8 @@ class InstanceUpdaterTest extends UnitTest {
       networkInfo = NetworkInfoPlaceholder()
     )
     val task = Task.LaunchedEphemeral(taskId, runSpecVersion = clock.now(), status = taskStatus)
-    val instance = Instance(Instance.Id("foobar.instance-baz"), agentInfo, instanceState, Map(taskId -> task), clock.now())
+    val instance = Instance(
+      Instance.Id("foobar.instance-baz"), agentInfo, instanceState, Map(taskId -> task), clock.now(),
+      UnreachableStrategy.default())
   }
 }

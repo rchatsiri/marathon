@@ -2,36 +2,28 @@ package mesosphere.marathon
 package integration
 
 import mesosphere.AkkaIntegrationTest
-import mesosphere.marathon.api.v2.json.AppUpdate
 import mesosphere.marathon.integration.facades.ITEnrichedTask
 import mesosphere.marathon.integration.facades.MarathonFacade._
 import mesosphere.marathon.integration.facades.MesosFacade.{ ITMesosState, ITResources }
 import mesosphere.marathon.integration.setup.{ EmbeddedMarathonTest, RestResult }
-import mesosphere.marathon.raml.Resources
-import mesosphere.marathon.state._
-import org.apache.mesos.{ Protos => Mesos }
-import org.slf4j.LoggerFactory
+import mesosphere.marathon.raml.{ App, AppPersistentVolume, AppResidency, AppUpdate, AppVolume, Container, EngineType, PersistentVolumeInfo, PortDefinition, ReadMode, UnreachableDisabled, UpgradeStrategy }
+import mesosphere.marathon.state.PathId
 
 import scala.collection.immutable.Seq
 import scala.concurrent.duration._
 import scala.util.Try
 
-@UnstableTest
 @IntegrationTest
 class ResidentTaskIntegrationTest extends AkkaIntegrationTest with EmbeddedMarathonTest {
 
   import Fixture._
-
-  private[this] val log = LoggerFactory.getLogger(getClass)
-
-  //clean up state before running the test case
-  before(cleanUp())
 
   "ResidentTaskIntegrationTest" should {
     "resident task can be deployed and write to persistent volume" in new Fixture {
       Given("An app that writes into a persistent volume")
       val containerPath = "persistent-volume"
       val app = residentApp(
+        id = appId("resident-task-can-be-deployed-and-write-to-persistent-volume"),
         containerPath = containerPath,
         cmd = s"""echo "data" > $containerPath/data""")
 
@@ -49,16 +41,13 @@ class ResidentTaskIntegrationTest extends AkkaIntegrationTest with EmbeddedMarat
       // would prevent launching a task because there `is` already a task (although not launched)
       Given("A resident app that uses a hostname:UNIQUE constraints")
       val containerPath = "persistent-volume"
-      val unique = Protos.Constraint.newBuilder
-        .setField("hostname")
-        .setOperator(Protos.Constraint.Operator.UNIQUE)
-        .setValue("")
-        .build
+      val unique = raml.Constraints("hostname" -> "UNIQUE")
 
       val app = residentApp(
+        id = appId("resident-task-that-uses-hostname-unique"),
         containerPath = containerPath,
         cmd = """sleep 1""",
-        constraints = Set(unique))
+        constraints = unique)
 
       When("A task is launched")
       val result = createAsynchronously(app)
@@ -72,6 +61,7 @@ class ResidentTaskIntegrationTest extends AkkaIntegrationTest with EmbeddedMarat
       Given("An app that writes into a persistent volume")
       val containerPath = "persistent-volume"
       val app = residentApp(
+        id = appId("resident-task-with-persistent-volumen-will-be-reattached-and-keep-state"),
         containerPath = containerPath,
         cmd = s"""echo data > $containerPath/data && sleep 1000""")
 
@@ -83,17 +73,12 @@ class ResidentTaskIntegrationTest extends AkkaIntegrationTest with EmbeddedMarat
       waitForDeployment(result)
 
       When("the app is suspended")
-      suspendSuccessfully(app.id)
-
-      And("we wait for a while")
-      // FIXME: we need to retry starting tasks since there is a race-condition in Mesos,
-      // probably related to our recycling of the task ID (but unconfirmed)
-      Thread.sleep(2000L)
+      suspendSuccessfully(PathId(app.id))
 
       And("a new task is started that checks for the previously written file")
       // deploy a new version that checks for the data written the above step
       val update = marathon.updateApp(
-        app.id,
+        PathId(app.id),
         AppUpdate(
           instances = Some(1),
           cmd = Some(s"""test -e $containerPath/data && sleep 2""")
@@ -108,8 +93,12 @@ class ResidentTaskIntegrationTest extends AkkaIntegrationTest with EmbeddedMarat
     }
 
     "resident task is launched completely on reserved resources" in new Fixture {
-      Given("A resident app")
-      val app = residentApp(portDefinitions = Seq.empty /* prevent problems by randomized port assignment */ )
+      Given("A clean state of the cluster since we check reserved resources")
+      cleanUp()
+
+      And("A resident app")
+      val app = residentApp(
+        id = appId("resident-task-is-launched-completely-on-reserved-resources"))
 
       When("A task is launched")
       createSuccessfully(app)
@@ -125,7 +114,7 @@ class ResidentTaskIntegrationTest extends AkkaIntegrationTest with EmbeddedMarat
       }
 
       When("the app is suspended")
-      suspendSuccessfully(app.id)
+      suspendSuccessfully(PathId(app.id))
 
       Then("there are no used resources anymore but there are the same reserved resources")
       val state2: RestResult[ITMesosState] = mesos.state
@@ -144,24 +133,28 @@ class ResidentTaskIntegrationTest extends AkkaIntegrationTest with EmbeddedMarat
 
     "Scale Up" in new Fixture {
       Given("A resident app with 0 instances")
-      val app = createSuccessfully(residentApp(instances = 0))
+      val app = createSuccessfully(residentApp(
+        id = appId("scale-up-resident-app-with-zero-instances"),
+        instances = 0))
 
       When("We scale up to 5 instances")
-      scaleToSuccessfully(app.id, 5)
+      scaleToSuccessfully(PathId(app.id), 5)
 
       Then("exactly 5 tasks have been created")
-      launchedTasks(app.id).size shouldBe 5
+      launchedTasks(PathId(app.id)).size shouldBe 5
     }
 
     "Scale Down" in new Fixture {
       Given("a resident app with 5 instances")
-      val app = createSuccessfully(residentApp(instances = 5))
+      val app = createSuccessfully(residentApp(
+        id = appId("scale-down-resident-app-with-five-instances"),
+        instances = 5))
 
       When("we scale down to 0 instances")
-      suspendSuccessfully(app.id)
+      suspendSuccessfully(PathId(app.id))
 
       Then("all tasks are suspended")
-      val all = allTasks(app.id)
+      val all = allTasks(PathId(app.id))
       all.size shouldBe 5
       all.count(_.launched) shouldBe 0
       all.count(_.suspended) shouldBe 5
@@ -171,18 +164,16 @@ class ResidentTaskIntegrationTest extends AkkaIntegrationTest with EmbeddedMarat
       Given("a resident app with 5 instances")
       val app = createSuccessfully(
         residentApp(
-          instances = 5,
-          // FIXME: we need to retry starting tasks since there is a race-condition in Mesos,
-          // probably related to our recycling of the task ID (but unconfirmed)
-          backoffDuration = 300.milliseconds
+          id = appId("restart-resident-app-with-five-instances"),
+          instances = 5
         )
       )
 
       When("we restart the app")
-      val newVersion = restartSuccessfully(app)
-      val all = allTasks(app.id)
+      val newVersion = restartSuccessfully(app) withClue ("The app did not restart.")
+      val all = allTasks(PathId(app.id))
 
-      log.info("tasks after relaunch: {}", all.mkString(";"))
+      logger.info("tasks after relaunch: {}", all.mkString(";"))
 
       Then("no extra task was created")
       all.size shouldBe 5
@@ -198,18 +189,16 @@ class ResidentTaskIntegrationTest extends AkkaIntegrationTest with EmbeddedMarat
       Given("a resident app with 5 instances")
       val app = createSuccessfully(
         residentApp(
-          instances = 5,
-          // FIXME: we need to retry starting tasks since there is a race-condition in Mesos,
-          // probably related to our recycling of the task ID (but unconfirmed)
-          backoffDuration = 300.milliseconds
+          id = appId("config-change-resident-app-with-five-instances"),
+          instances = 5
         )
       )
 
       When("we change the config")
-      val newVersion = updateSuccessfully(app.id, AppUpdate(cmd = Some("sleep 1234"))).toString
-      val all = allTasks(app.id)
+      val newVersion = updateSuccessfully(PathId(app.id), AppUpdate(cmd = Some("sleep 1234"))).toString
+      val all = allTasks(PathId(app.id))
 
-      log.info("tasks after config change: {}", all.mkString(";"))
+      logger.info("tasks after config change: {}", all.mkString(";"))
 
       Then("no extra task was created")
       all should have size 5
@@ -220,41 +209,6 @@ class ResidentTaskIntegrationTest extends AkkaIntegrationTest with EmbeddedMarat
       And("all 5 tasks are of the new version")
       all.map(_.version).forall(_.contains(newVersion)) shouldBe true
     }
-
-    /**
-      * FIXME (3043): implement the following tests. TASK_LOST can be induced when launching a task with permission:
-      *
-      * When a framework launches a task, “run_tasks” ACLs are checked to see if the framework
-      * (FrameworkInfo.principal) is authorized to run the task/executor as the given user. If not authorized,
-      * the launch is rejected and the framework gets a TASK_LOST.
-      *
-      * (From http://mesos.apache.org/documentation/latest/authorization/)
-      */
-
-    "taskLostBehavior = RELAUNCH_AFTER_TIMEOUT, timeout = 10s" in {
-      pending
-      Given("A resident app with 1 instance")
-      When("The task is lost")
-      Then("The task is not relaunched within the timeout")
-      And("The task is relaunched with a new Id after the timeout")
-    }
-
-    "taskLostBehavior = WAIT_FOREVER" in {
-      pending
-      Given("A resident app with 1 instance")
-      When("The task is lost")
-      Then("No timeout is scheduled") // can we easily verify this?
-      And("The task is not relaunched") // can we verify this without waiting?
-    }
-
-    "relaunchEscalationTimeoutSeconds = 5s" in {
-      pending
-      Given("A resident app with 1 instance")
-      When("The task terminates")
-      And("We don't get an offer within the timeout")
-      Then("We launch a new task on any matching offer")
-    }
-
   }
 
   class Fixture {
@@ -263,7 +217,7 @@ class ResidentTaskIntegrationTest extends AkkaIntegrationTest with EmbeddedMarat
     val mem: Double = 1.0
     val disk: Double = 1.0
     val gpus: Double = 0.0
-    val persistentVolumeSize: Long = 2
+    val persistentVolumeSize = 2L
 
     val itMesosResources = ITResources(
       "mem" -> mem,
@@ -272,60 +226,61 @@ class ResidentTaskIntegrationTest extends AkkaIntegrationTest with EmbeddedMarat
       "gpus" -> gpus
     )
 
+    def appId(suffix: String): PathId = PathId(s"/$testBasePath/app-$suffix")
+
     def residentApp(
+      id: PathId = PathId(s"/$testBasePath/app-${IdGenerator.generate()}"),
       containerPath: String = "persistent-volume",
       cmd: String = "sleep 1000",
       instances: Int = 1,
       backoffDuration: FiniteDuration = 1.hour,
-      portDefinitions: Seq[PortDefinition] = PortDefinitions(0),
-      constraints: Set[Protos.Constraint] = Set.empty[Protos.Constraint]): AppDefinition = {
+      portDefinitions: Seq[PortDefinition] = Seq.empty, /* prevent problems by randomized port assignment */
+      constraints: Set[Seq[String]] = Set.empty): App = {
 
-      val appId: PathId = PathId(s"/$testBasePath/app-${IdGenerator.generate()}")
-
-      val persistentVolume: Volume = PersistentVolume(
+      val persistentVolume: AppVolume = AppPersistentVolume(
         containerPath = containerPath,
         persistent = PersistentVolumeInfo(size = persistentVolumeSize),
-        mode = Mesos.Volume.Mode.RW
+        mode = ReadMode.Rw
       )
 
-      val app = AppDefinition(
-        appId,
+      val app = App(
+        id.toString,
         instances = instances,
-        residency = Some(Residency(
-          Residency.defaultRelaunchEscalationTimeoutSeconds,
-          Residency.defaultTaskLostBehaviour
-        )),
+        residency = Some(AppResidency()),
         constraints = constraints,
-        container = Some(Container.Mesos(
+        container = Some(Container(
+          `type` = EngineType.Mesos,
           volumes = Seq(persistentVolume)
         )),
         cmd = Some(cmd),
-        executor = "",
         // cpus, mem and disk are really small because otherwise we'll soon run out of reservable resources
-        resources = Resources(cpus = cpus, mem = mem, disk = disk),
-        portDefinitions = portDefinitions,
-        backoffStrategy = BackoffStrategy(backoff = backoffDuration),
-        upgradeStrategy = UpgradeStrategy(0.5, 0.0)
+        cpus = cpus,
+        mem = mem,
+        disk = disk,
+        portDefinitions = Some(portDefinitions),
+        backoffSeconds = backoffDuration.toSeconds.toInt,
+        upgradeStrategy = Some(UpgradeStrategy(minimumHealthCapacity = 0.5, maximumOverCapacity = 0.0)),
+        unreachableStrategy = Some(UnreachableDisabled.DefaultValue)
       )
 
       app
     }
 
-    def createSuccessfully(app: AppDefinition): AppDefinition = {
+    def createSuccessfully(app: App): App = {
       waitForDeployment(createAsynchronously(app))
       app
     }
 
-    def createAsynchronously(app: AppDefinition): RestResult[AppDefinition] = {
+    def createAsynchronously(app: App): RestResult[App] = {
       val result = marathon.createAppV2(app)
-      result.code should be(201) //Created
+      result should be(Created)
       extractDeploymentIds(result) should have size 1
       result
     }
 
     def scaleToSuccessfully(appId: PathId, instances: Int): Seq[ITEnrichedTask] = {
       val result = marathon.updateApp(appId, AppUpdate(instances = Some(instances)))
-      result.code should be (200) // OK
+      result should be(OK)
       waitForDeployment(result)
       waitForTasks(appId, instances)
     }
@@ -334,14 +289,14 @@ class ResidentTaskIntegrationTest extends AkkaIntegrationTest with EmbeddedMarat
 
     def updateSuccessfully(appId: PathId, update: AppUpdate): VersionString = {
       val result = marathon.updateApp(appId, update)
-      result.code shouldBe 200
+      result should be(OK)
       waitForDeployment(result)
       result.value.version.toString
     }
 
-    def restartSuccessfully(app: AppDefinition): VersionString = {
-      val result = marathon.restartApp(app.id)
-      result.code shouldBe 200
+    def restartSuccessfully(app: App): VersionString = {
+      val result = marathon.restartApp(PathId(app.id))
+      result should be(OK)
       waitForDeployment(result)
       result.value.version.toString
     }

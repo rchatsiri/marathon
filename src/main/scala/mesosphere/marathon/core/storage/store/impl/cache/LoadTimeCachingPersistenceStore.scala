@@ -7,10 +7,11 @@ import java.time.OffsetDateTime
 import akka.http.scaladsl.marshalling.Marshaller
 import akka.http.scaladsl.unmarshalling.{ Unmarshal, Unmarshaller }
 import akka.stream.Materializer
-import akka.stream.scaladsl.Source
+import akka.stream.scaladsl.{ Sink, Source }
 import akka.{ Done, NotUsed }
 import com.typesafe.scalalogging.StrictLogging
 import mesosphere.marathon.Protos.StorageVersion
+import mesosphere.marathon.core.storage.backup.BackupItem
 import mesosphere.marathon.core.storage.store.impl.BasePersistenceStore
 import mesosphere.marathon.core.storage.store.{ IdResolver, PersistenceStore }
 import mesosphere.marathon.util.KeyedLock
@@ -48,6 +49,10 @@ class LoadTimeCachingPersistenceStore[K, Category, Serialized](
   // serialized form as a Left() until it is deserialized, in which case we store as a Right()
   private[store] var valueCache: Future[TrieMap[K, Either[Serialized, Any]]] =
     Future.failed(new NotActiveException())
+
+  override def markOpen(): Unit = store.markOpen()
+  override def markClosed(): Unit = store.markClosed()
+  override def isOpen: Boolean = store.isOpen
 
   override def storageVersion(): Future[Option[StorageVersion]] = store.storageVersion()
 
@@ -153,6 +158,11 @@ class LoadTimeCachingPersistenceStore[K, Category, Serialized](
     um: Unmarshaller[Serialized, V]): Future[Option[V]] =
     store.get(id, version)
 
+  override def getVersions[Id, V](list: Seq[(Id, OffsetDateTime)])(implicit
+    ir: IdResolver[Id, V, Category, K],
+    um: Unmarshaller[Serialized, V]): Source[V, NotUsed] =
+    store.getVersions(list)
+
   @SuppressWarnings(Array("all")) // async/await
   override def store[Id, V](id: Id, v: V)(implicit
     ir: IdResolver[Id, V, Category, K],
@@ -189,6 +199,16 @@ class LoadTimeCachingPersistenceStore[K, Category, Serialized](
       }
     }
   }
+
+  override def backup(): Source[BackupItem, NotUsed] = store.backup()
+
+  override def restore(): Sink[BackupItem, Future[Done]] = store.restore()
+
+  override def sync(): Future[Done] = store.sync()
+
+  override def startMigration(): Future[Done] = store.startMigration()
+
+  override def endMigration(): Future[Done] = store.endMigration()
 
   override def versions[Id, V](id: Id)(implicit ir: IdResolver[Id, V, Category, K]): Source[OffsetDateTime, NotUsed] =
     store.versions(id)

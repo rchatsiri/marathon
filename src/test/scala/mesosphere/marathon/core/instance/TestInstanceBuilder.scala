@@ -6,8 +6,8 @@ import mesosphere.marathon.core.instance.Instance.{ AgentInfo, InstanceState, Le
 import mesosphere.marathon.core.instance.update.{ InstanceUpdateOperation, InstanceUpdater }
 import mesosphere.marathon.core.pod.MesosContainer
 import mesosphere.marathon.core.task.Task
-import mesosphere.marathon.core.task.state.NetworkInfoPlaceholder
-import mesosphere.marathon.state.{ PathId, Timestamp }
+import mesosphere.marathon.core.task.state.{ AgentInfoPlaceholder, AgentTestDefaults, NetworkInfoPlaceholder }
+import mesosphere.marathon.state.{ PathId, Timestamp, UnreachableEnabled, UnreachableStrategy }
 import org.apache.mesos
 
 import scala.collection.immutable.Seq
@@ -20,8 +20,11 @@ case class TestInstanceBuilder(
   def addTaskLaunched(container: Option[MesosContainer] = None): TestInstanceBuilder =
     addTaskWithBuilder().taskLaunched(container).build()
 
-  def addTaskReserved(reservation: Task.Reservation = TestTaskBuilder.Helper.newReservation, containerName: Option[String] = None): TestInstanceBuilder =
-    addTaskWithBuilder().taskReserved(reservation, containerName).build()
+  def addTaskReserved(containerName: Option[String] = None): TestInstanceBuilder =
+    addTaskWithBuilder().taskReserved(containerName).build()
+
+  def addTaskReserved(localVolumeIds: Task.LocalVolumeId*): TestInstanceBuilder =
+    addTaskWithBuilder().taskResidentReserved(localVolumeIds: _*).build()
 
   def addTaskResidentReserved(localVolumeIds: Task.LocalVolumeId*): TestInstanceBuilder =
     addTaskWithBuilder().taskResidentReserved(localVolumeIds: _*).build()
@@ -29,14 +32,18 @@ case class TestInstanceBuilder(
   def addTaskResidentLaunched(localVolumeIds: Task.LocalVolumeId*): TestInstanceBuilder =
     addTaskWithBuilder().taskResidentLaunched(localVolumeIds: _*).build()
 
+  def addTaskResidentUnreachable(localVolumeIds: Task.LocalVolumeId*): TestInstanceBuilder =
+    addTaskWithBuilder().taskResidentUnreachable(localVolumeIds: _*).build()
+
   def addTaskRunning(containerName: Option[String] = None, stagedAt: Timestamp = now, startedAt: Timestamp = now): TestInstanceBuilder =
     addTaskWithBuilder().taskRunning(containerName, stagedAt, startedAt).build()
 
   def addTaskLost(since: Timestamp = now, containerName: Option[String] = None): TestInstanceBuilder =
     addTaskWithBuilder().taskLost(since, containerName).build()
 
-  def addTaskUnreachable(since: Timestamp = now, containerName: Option[String] = None): TestInstanceBuilder =
-    addTaskWithBuilder().taskUnreachable(since, containerName).build()
+  def addTaskUnreachable(since: Timestamp = now, containerName: Option[String] = None, unreachableStrategy: UnreachableStrategy = UnreachableEnabled()): TestInstanceBuilder =
+    this.copy(instance = instance.copy(unreachableStrategy = unreachableStrategy)) // we need to update the unreachable strategy first before adding an unreachable task
+      .addTaskWithBuilder().taskUnreachable(since, containerName).build()
 
   def addTaskUnreachableInactive(since: Timestamp = now, containerName: Option[String] = None): TestInstanceBuilder =
     addTaskWithBuilder().taskUnreachableInactive(since, containerName).build()
@@ -87,10 +94,18 @@ case class TestInstanceBuilder(
 
   def withAgentInfo(agentInfo: AgentInfo): TestInstanceBuilder = copy(instance = instance.copy(agentInfo = agentInfo))
 
-  def withAgentInfo(agentId: Option[String] = None, hostName: Option[String] = None, attributes: Option[Seq[mesos.Protos.Attribute]] = None): TestInstanceBuilder =
+  def withAgentInfo(
+    agentId: Option[String] = None,
+    hostName: Option[String] = None,
+    attributes: Option[Seq[mesos.Protos.Attribute]] = None,
+    region: Option[String] = None,
+    zone: Option[String] = None
+  ): TestInstanceBuilder =
     copy(instance = instance.copy(agentInfo = instance.agentInfo.copy(
       agentId = agentId.orElse(instance.agentInfo.agentId),
       host = hostName.getOrElse(instance.agentInfo.host),
+      region = region.orElse(instance.agentInfo.region),
+      zone = zone.orElse(instance.agentInfo.zone),
       attributes = attributes.getOrElse(instance.agentInfo.attributes)
     )))
 
@@ -99,12 +114,17 @@ case class TestInstanceBuilder(
   def stateOpUpdate(mesosStatus: mesos.Protos.TaskStatus) = InstanceUpdateOperation.MesosUpdate(instance, mesosStatus, now)
 
   def taskLaunchedOp(): InstanceUpdateOperation.LaunchOnReservation = {
+    val taskId = instance.appTask.taskId
+    val newTaskId = Task.Id.forResidentTask(taskId)
     InstanceUpdateOperation.LaunchOnReservation(
       instanceId = instance.instanceId,
+      oldToNewTaskIds = Map(taskId -> newTaskId),
       timestamp = now,
       runSpecVersion = instance.runSpecVersion,
-      status = Task.Status(stagedAt = now, condition = Condition.Running, networkInfo = NetworkInfoPlaceholder()),
-      hostPorts = Seq.empty)
+      statuses = Map(taskId -> Task.Status(
+        stagedAt = now, condition = Condition.Running, networkInfo = NetworkInfoPlaceholder())),
+      hostPorts = Map.empty,
+      agentInfo = AgentInfoPlaceholder())
   }
 
   def stateOpExpunge() = InstanceUpdateOperation.ForceExpunge(instance.instanceId)
@@ -119,10 +139,13 @@ object TestInstanceBuilder {
     agentInfo = TestInstanceBuilder.defaultAgentInfo,
     state = InstanceState(Condition.Created, now, None, healthy = None),
     tasksMap = Map.empty,
-    runSpecVersion = version
+    runSpecVersion = version,
+    UnreachableStrategy.default()
   )
 
-  private val defaultAgentInfo = Instance.AgentInfo(host = "host.some", agentId = None, attributes = Seq.empty)
+  private val defaultAgentInfo = Instance.AgentInfo(
+    host = AgentTestDefaults.defaultHostName,
+    agentId = Some(AgentTestDefaults.defaultAgentId), region = None, zone = None, attributes = Seq.empty)
 
   def newBuilder(runSpecId: PathId, now: Timestamp = Timestamp.now(), version: Timestamp = Timestamp.zero): TestInstanceBuilder = newBuilderWithInstanceId(Instance.Id.forRunSpec(runSpecId), now, version)
 

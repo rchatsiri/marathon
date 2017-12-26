@@ -1,20 +1,28 @@
 package mesosphere.marathon
 package storage.migration
 
+import akka.actor.Scheduler
+import java.net.URI
+
 import akka.Done
 import akka.stream.Materializer
 import com.typesafe.scalalogging.StrictLogging
 import mesosphere.marathon.Protos.StorageVersion
+import mesosphere.marathon.core.async.ExecutionContexts.global
+import mesosphere.marathon.core.storage.backup.PersistentStoreBackup
 import mesosphere.marathon.core.storage.store.PersistenceStore
-import mesosphere.marathon.metrics.Metrics
+import mesosphere.marathon.storage.StorageConfig
 import mesosphere.marathon.storage.repository._
+import mesosphere.marathon.util.toRichFuture
 
 import scala.async.Async.{ async, await }
-import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.duration._
 import scala.concurrent.{ Await, Future }
 import scala.util.control.NonFatal
 import scala.util.matching.Regex
+import mesosphere.marathon.raml.RuntimeConfiguration
+
+import scala.util.{ Failure, Success }
 
 /**
   * @param persistenceStore Optional "new" PersistenceStore for new migrations, the repositories
@@ -23,21 +31,24 @@ import scala.util.matching.Regex
 @SuppressWarnings(Array("UnusedMethodParameter")) // materializer will definitely be used in the future.
 class Migration(
     private[migration] val availableFeatures: Set[String],
+    private[migration] val defaultNetworkName: Option[String],
+    private[migration] val mesosBridgeName: String,
     private[migration] val persistenceStore: PersistenceStore[_, _, _],
     private[migration] val appRepository: AppRepository,
+    private[migration] val podRepository: PodRepository,
     private[migration] val groupRepository: GroupRepository,
     private[migration] val deploymentRepository: DeploymentRepository,
-    private[migration] val taskRepo: TaskRepository,
     private[migration] val instanceRepo: InstanceRepository,
     private[migration] val taskFailureRepo: TaskFailureRepository,
     private[migration] val frameworkIdRepo: FrameworkIdRepository,
-    private[migration] val eventSubscribersRepo: EventSubscribersRepository)(implicit
-  mat: Materializer,
-    metrics: Metrics) extends StrictLogging {
+    private[migration] val serviceDefinitionRepo: ServiceDefinitionRepository,
+    private[migration] val runtimeConfigurationRepository: RuntimeConfigurationRepository,
+    private[migration] val backup: PersistentStoreBackup,
+    private[migration] val config: StorageConfig
+)(implicit mat: Materializer, scheduler: Scheduler) extends StrictLogging {
 
   import StorageVersions._
-
-  type MigrationAction = (StorageVersion, () => Future[Any])
+  import Migration.{ MigrationAction, statusLoggingInterval }
 
   private[migration] val minSupportedStorageVersion = StorageVersions(1, 4, 0, StorageVersion.StorageFormat.PERSISTENCE_STORE)
 
@@ -45,7 +56,28 @@ class Migration(
     * All the migrations, that have to be applied.
     * They get applied after the master has been elected.
     */
-  def migrations: List[MigrationAction] = List.empty
+  def migrations: List[MigrationAction] =
+    List(
+      StorageVersions(1, 4, 2, StorageVersion.StorageFormat.PERSISTENCE_STORE) -> { () =>
+        new MigrationTo142(appRepository).migrate()
+      },
+      StorageVersions(1, 4, 6, StorageVersion.StorageFormat.PERSISTENCE_STORE) -> { () =>
+        new MigrationTo146(appRepository, podRepository).migrate()
+      },
+      StorageVersions(1, 5, 0, StorageVersion.StorageFormat.PERSISTENCE_STORE) -> (() =>
+        MigrationTo15(this).migrate()
+      ),
+      StorageVersions(1, 5, 2, StorageVersion.StorageFormat.PERSISTENCE_STORE) -> (() =>
+        new MigrationTo152(instanceRepo).migrate()
+      )
+    )
+
+  protected def notifyMigrationInProgress(from: StorageVersion, migrateVersion: StorageVersion) = {
+    logger.info(
+      s"Migration for storage: ${from.str} to current: ${current.str}: " +
+        s"application of the change for version ${migrateVersion.str} is still in progress"
+    )
+  }
 
   def applyMigrationSteps(from: StorageVersion): Future[Seq[StorageVersion]] = {
     migrations.filter(_._1 > from).sortBy(_._1).foldLeft(Future.successful(Seq.empty[StorageVersion])) {
@@ -54,16 +86,66 @@ class Migration(
           s"Migration for storage: ${from.str} to current: ${current.str}: " +
             s"apply change for version: ${migrateVersion.str} "
         )
-        change.apply().map(_ => res :+ migrateVersion)
+
+        val migrationInProgressNotification = scheduler.schedule(statusLoggingInterval, statusLoggingInterval) {
+          notifyMigrationInProgress(from, migrateVersion)
+        }
+
+        change.apply().recover {
+          case e: MigrationCancelledException => throw e
+          case NonFatal(e) =>
+            throw new MigrationFailedException(s"while migrating storage to $migrateVersion", e)
+        }.map { _ =>
+          res :+ migrateVersion
+        }.andThen {
+          case _ =>
+            migrationInProgressNotification.cancel()
+        }
       }
     }
   }
 
   @SuppressWarnings(Array("all")) // async/await
-  def migrate(): Seq[StorageVersion] = {
-    val result = async {
-      val currentVersion = await(getCurrentVersion())
+  def migrateAsync(): Future[Seq[StorageVersion]] = async {
 
+    val config = await(runtimeConfigurationRepository.get()).getOrElse(RuntimeConfiguration())
+    // before backup/restore called, reset the runtime configuration
+    await(runtimeConfigurationRepository.store(RuntimeConfiguration(None, None)))
+    // step 1: backup current zk state
+    await(config.backup.map(uri => backup.backup(new URI(uri))).getOrElse(Future.successful(Done)))
+    // step 2: restore state from given backup
+    await(config.restore.map(uri => backup.restore(new URI(uri))).getOrElse(Future.successful(Done)))
+
+    // mark migration as started
+    await(persistenceStore.startMigration())
+
+    // run the migration, to ensure we can operate on the zk state
+    await(migrateStorage(backupCreated = config.backup.isDefined || config.restore.isDefined).asTry) match {
+      case Success(result) =>
+        // mark migration as completed
+        await(persistenceStore.endMigration())
+
+        logger.info(s"Migration successfully applied for version ${StorageVersions.current.str}")
+        result
+      case Failure(ex: MigrationCancelledException) =>
+        logger.error(ex.getMessage)
+
+        // mark migration as completed
+        await(persistenceStore.endMigration())
+
+        throw new MigrationFailedException("Migration cancelled", ex.getCause)
+      case Failure(ex) =>
+        throw ex
+    }
+  }
+
+  def migrate(): Seq[StorageVersion] =
+    Await.result(migrateAsync(), Duration.Inf)
+
+  @SuppressWarnings(Array("all")) // async/await
+  def migrateStorage(backupCreated: Boolean = false): Future[Seq[StorageVersion]] = {
+    async {
+      val currentVersion = await(getCurrentVersion)
       val currentBuildVersion = StorageVersions.current
 
       val migrations = currentVersion match {
@@ -76,6 +158,11 @@ class Migration(
             s" than ${StorageVersions.current.str}."
           throw new MigrationFailedException(msg)
         case Some(version) if version < currentBuildVersion =>
+          if (!backupCreated && config.backupLocation.isDefined) {
+            logger.info("Backup current state")
+            await(backup.backup(config.backupLocation.get))
+            logger.info("Backup finished. Apply migration.")
+          }
           val result = await(applyMigrationSteps(version))
           await(storeCurrentVersion())
           result
@@ -89,16 +176,14 @@ class Migration(
       }
       migrations
     }.recover {
+      case ex: MigrationCancelledException => throw ex
       case ex: MigrationFailedException => throw ex
-      case NonFatal(ex) => throw new MigrationFailedException(s"Migration Failed: ${ex.getMessage}", ex)
+      case NonFatal(ex) =>
+        throw new MigrationFailedException(s"Migration Failed: ${ex.getMessage}", ex)
     }
-
-    val migrations = Await.result(result, Duration.Inf)
-    logger.info(s"Migration successfully applied for version ${StorageVersions.current.str}")
-    migrations
   }
 
-  private def getCurrentVersion(): Future[Option[StorageVersion]] =
+  private def getCurrentVersion: Future[Option[StorageVersion]] =
     persistenceStore.storageVersion()
 
   private def storeCurrentVersion(): Future[Done] =
@@ -107,6 +192,11 @@ class Migration(
 
 object Migration {
   val StorageVersionName = "internal:storage:version"
+  val maxConcurrency = 8
+  val statusLoggingInterval = 10.seconds
+
+  type MigrationAction = (StorageVersion, () => Future[Any])
+
 }
 
 object StorageVersions {
@@ -130,6 +220,13 @@ object StorageVersions {
           major.toInt,
           minor.toInt,
           patch.toInt,
+          StorageVersion.StorageFormat.PERSISTENCE_STORE
+        )
+      case BuildInfo.DefaultBuildVersion =>
+        StorageVersions(
+          BuildInfo.DefaultMajor,
+          BuildInfo.DefaultMinor,
+          BuildInfo.DefaultPatch,
           StorageVersion.StorageFormat.PERSISTENCE_STORE
         )
     }

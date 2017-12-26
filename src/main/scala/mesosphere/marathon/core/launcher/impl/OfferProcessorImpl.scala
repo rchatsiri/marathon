@@ -2,70 +2,89 @@ package mesosphere.marathon
 package core.launcher.impl
 
 import akka.Done
+import akka.stream.scaladsl.SourceQueue
 import com.typesafe.scalalogging.StrictLogging
-import mesosphere.marathon.core.base.Clock
 import mesosphere.marathon.core.instance.update.InstanceUpdateOperation
 import mesosphere.marathon.core.launcher.{ InstanceOp, OfferProcessor, OfferProcessorConfig, TaskLauncher }
 import mesosphere.marathon.core.matcher.base.OfferMatcher
 import mesosphere.marathon.core.matcher.base.OfferMatcher.{ InstanceOpWithSource, MatchedInstanceOps }
-import mesosphere.marathon.core.task.tracker.InstanceCreationHandler
-import mesosphere.marathon.metrics.{ MetricPrefixes, Metrics }
-import mesosphere.marathon.state.Timestamp
+import mesosphere.marathon.core.task.tracker.InstanceStateOpProcessor
+import mesosphere.marathon.metrics.{ Metrics, ServiceMetric }
 import org.apache.mesos.Protos.{ Offer, OfferID }
 
 import scala.concurrent.Future
-import scala.concurrent.duration._
 import scala.util.control.NonFatal
 
 /**
   * Passes processed offers to the offerMatcher and launches the appropriate tasks.
+  *
+  * {{{
+  * @startuml
+  * participant MarathonScheduler
+  * participant OfferProcessorImpl
+  * participant OfferMatcherManagerActor
+  * participant TaskLauncherActor
+  * participant TaskLauncherImpl
+  *
+  * rnote over TaskLauncherActor
+  * Every RunSpec to launch has its
+  * own actor.The OfferMatcherManager
+  * will ask every TaskLauncherActor
+  * one by one.
+  * endrnote
+  *
+  * MarathonScheduler -> OfferProcessorImpl: processOffer(offer)
+  * OfferProcessorImpl -> OfferMatcherManagerActor: matchOffer(offer)
+  * OfferProcessorImpl --> MarathonScheduler: Done
+  * OfferMatcherManagerActor -> OfferMatcherManagerActor: Queue offer if all matchers are busy
+  * loop until there is no matcher left, offer exhausted or timeout reached
+  *      OfferMatcherManagerActor -> TaskLauncherActor: matchOffer(offer): MatchedInstanceOp
+  *      TaskLauncherActor -> OfferMatcherManagerActor: MatchOffer(promise)
+  *      OfferMatcherManagerActor -> OfferMatcherManagerActor: MatchedInstanceOps(offer, addedOps, resendOffer)
+  *      OfferMatcherManagerActor -> OfferMatcherManagerActor: scheduleNextMatcherOrFinish(nextData)
+  * end
+  * OfferMatcherManagerActor --> OfferProcessorImpl : MatchedInstanceOps
+  * OfferProcessorImpl -> TaskLauncherImpl: acceptOffer | declineOffer
+  * @enduml
+  * }}}
   */
 private[launcher] class OfferProcessorImpl(
-    conf: OfferProcessorConfig, clock: Clock,
-    metrics: Metrics,
+    conf: OfferProcessorConfig,
     offerMatcher: OfferMatcher,
     taskLauncher: TaskLauncher,
-    taskCreationHandler: InstanceCreationHandler) extends OfferProcessor with StrictLogging {
-  import scala.concurrent.ExecutionContext.Implicits.global
-
-  private[this] val offerMatchingTimeout = conf.offerMatchingTimeout().millis
-  private[this] val saveTasksToLaunchTimeout = conf.saveTasksToLaunchTimeout().millis
+    stateOpProcessor: InstanceStateOpProcessor,
+    offerStreamInput: SourceQueue[Offer]) extends OfferProcessor with StrictLogging {
+  import mesosphere.marathon.core.async.ExecutionContexts.global
 
   private[this] val incomingOffersMeter =
-    metrics.meter(metrics.name(MetricPrefixes.SERVICE, getClass, "incomingOffers"))
+    Metrics.minMaxCounter(ServiceMetric, getClass, "incomingOffers")
   private[this] val matchTimeMeter =
-    metrics.timer(metrics.name(MetricPrefixes.SERVICE, getClass, "matchTime"))
+    Metrics.timer(ServiceMetric, getClass, "matchTime")
   private[this] val matchErrorsMeter =
-    metrics.meter(metrics.name(MetricPrefixes.SERVICE, getClass, "matchErrors"))
+    Metrics.minMaxCounter(ServiceMetric, getClass, "matchErrors")
   private[this] val savingTasksTimeMeter =
-    metrics.timer(metrics.name(MetricPrefixes.SERVICE, getClass, "savingTasks"))
-  private[this] val savingTasksTimeoutMeter =
-    metrics.meter(metrics.name(MetricPrefixes.SERVICE, getClass, "savingTasksTimeouts"))
+    Metrics.timer(ServiceMetric, getClass, "savingTasks")
   private[this] val savingTasksErrorMeter =
-    metrics.meter(metrics.name(MetricPrefixes.SERVICE, getClass, "savingTasksErrors"))
+    Metrics.minMaxCounter(ServiceMetric, getClass, "savingTasksErrors")
 
   override def processOffer(offer: Offer): Future[Done] = {
-    logger.debug(s"Received offer\n${offer}")
-    incomingOffersMeter.mark()
+    incomingOffersMeter.increment()
+    offerStreamInput.offer(offer)
 
-    val now = clock.now()
-    val matchingDeadline = now + offerMatchingTimeout
-    val savingDeadline = matchingDeadline + saveTasksToLaunchTimeout
-
-    val matchFuture: Future[MatchedInstanceOps] = matchTimeMeter.timeFuture {
-      offerMatcher.matchOffer(now, matchingDeadline, offer)
+    val matchFuture: Future[MatchedInstanceOps] = matchTimeMeter {
+      offerMatcher.matchOffer(offer)
     }
 
     matchFuture
       .recover {
         case NonFatal(e) =>
-          matchErrorsMeter.mark()
+          matchErrorsMeter.increment()
           logger.error(s"Could not process offer '${offer.getId.getValue}'", e)
           MatchedInstanceOps.noMatch(offer.getId, resendThisOffer = true)
       }.flatMap {
         case MatchedInstanceOps(offerId, tasks, resendThisOffer) =>
-          savingTasksTimeMeter.timeFuture {
-            saveTasks(tasks, savingDeadline).map { savedTasks =>
+          savingTasksTimeMeter {
+            saveTasks(tasks).map { savedTasks =>
               def notAllSaved: Boolean = savedTasks.size != tasks.size
               MatchedInstanceOps(offerId, savedTasks, resendThisOffer || notAllSaved)
             }
@@ -102,11 +121,11 @@ private[launcher] class OfferProcessorImpl(
       terminatedFuture.flatMap { _ =>
         nextOp.oldInstance match {
           case Some(existingInstance) =>
-            taskCreationHandler.created(InstanceUpdateOperation.Revert(existingInstance))
+            stateOpProcessor.process(InstanceUpdateOperation.Revert(existingInstance))
           case None =>
-            taskCreationHandler.terminated(InstanceUpdateOperation.ForceExpunge(nextOp.instanceId))
+            stateOpProcessor.process(InstanceUpdateOperation.ForceExpunge(nextOp.instanceId))
         }
-      }
+      }.map(_ => Done)
     }.recover {
       case NonFatal(e) =>
         throw new RuntimeException("while reverting task ops", e)
@@ -118,17 +137,17 @@ private[launcher] class OfferProcessorImpl(
     * already.
     */
   private[this] def saveTasks(
-    ops: Seq[InstanceOpWithSource], savingDeadline: Timestamp): Future[Seq[InstanceOpWithSource]] = {
+    ops: Seq[InstanceOpWithSource]): Future[Seq[InstanceOpWithSource]] = {
 
     def saveTask(taskOpWithSource: InstanceOpWithSource): Future[Option[InstanceOpWithSource]] = {
       val taskId = taskOpWithSource.instanceId
       logger.info(s"Processing ${taskOpWithSource.op.stateOp} for ${taskOpWithSource.instanceId}")
-      taskCreationHandler
-        .created(taskOpWithSource.op.stateOp)
+      stateOpProcessor
+        .process(taskOpWithSource.op.stateOp)
         .map(_ => Some(taskOpWithSource))
         .recoverWith {
           case NonFatal(e) =>
-            savingTasksErrorMeter.mark()
+            savingTasksErrorMeter.increment()
             taskOpWithSource.reject(s"storage error: $e")
             logger.warn(s"error while storing task $taskId for app [${taskId.runSpecId}]", e)
             revertTaskOps(Seq(taskOpWithSource.op))
@@ -137,17 +156,8 @@ private[launcher] class OfferProcessorImpl(
 
     ops.foldLeft(Future.successful(Vector.empty[InstanceOpWithSource])) { (savedTasksFuture, nextTask) =>
       savedTasksFuture.flatMap { savedTasks =>
-        if (clock.now() > savingDeadline) {
-          savingTasksTimeoutMeter.mark(savedTasks.size.toLong)
-          nextTask.reject("saving timeout reached")
-          logger.info(
-            s"Timeout reached, skipping launch and save for ${nextTask.op.instanceId}. " +
-              s"You can reconfigure this with --${conf.saveTasksToLaunchTimeout.name}.")
-          Future.successful(savedTasks)
-        } else {
-          val saveTaskFuture = saveTask(nextTask)
-          saveTaskFuture.map(task => savedTasks ++ task)
-        }
+        val saveTaskFuture = saveTask(nextTask)
+        saveTaskFuture.map(task => savedTasks ++ task)
       }
     }
   }

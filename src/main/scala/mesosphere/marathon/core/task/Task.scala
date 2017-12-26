@@ -108,6 +108,11 @@ object Task {
     lazy val runSpecId: PathId = Id.runSpecId(idString)
     lazy val instanceId: Instance.Id = Id.instanceId(idString)
     lazy val containerName: Option[String] = Id.containerName(idString)
+    /**
+      * For resident tasks, this will denote the number of launched tasks on a reservation since 1.5
+      */
+    lazy val attempt: Option[Long] = Id.attempt(idString)
+
     override def toString: String = s"task [$idString]"
     override def compare(that: Id): Int = idString.compare(that.idString)
   }
@@ -121,14 +126,22 @@ object Task {
     // Regular expression for matching taskIds before instance-era
     private val LegacyTaskIdRegex = """^(.+)[\._]([^_\.]+)$""".r
 
+    // Regular expression for matching resident app taskIds
+    private val ResidentTaskIdRegex = """^(.+)([\._])([^_\.]+)(\.)(\d+)$""".r
+    private val ResidentTaskIdAttemptSeparator = "."
+
     // Regular expression for matching taskIds since instance-era
     private val TaskIdWithInstanceIdRegex = """^(.+)\.(instance-|marathon-)([^_\.]+)[\._]([^_\.]+)$""".r
+    private val ResidentTaskIdWithInstanceIdRegex = """^(.+)\.(instance-|marathon-)([^_\.]+)[\._]([^_\.]+)\.(\d+)$""".r
 
     private val uuidGenerator = Generators.timeBasedGenerator(EthernetAddress.fromInterface())
 
     def runSpecId(taskId: String): PathId = {
       taskId match {
-        case TaskIdWithInstanceIdRegex(runSpecId, prefix, instanceId, maybeContainer) => PathId.fromSafePath(runSpecId)
+        case ResidentTaskIdWithInstanceIdRegex(runSpecId, prefix, uuid, container, attempt) =>
+          PathId.fromSafePath(runSpecId)
+        case TaskIdWithInstanceIdRegex(runSpecId, _, _, _) => PathId.fromSafePath(runSpecId)
+        case ResidentTaskIdRegex(runSpecId, _, uuid, _, attempt) => PathId.fromSafePath(runSpecId)
         case LegacyTaskIdRegex(runSpecId, uuid) => PathId.fromSafePath(runSpecId)
         case _ => throw new MatchError(s"taskId $taskId is no valid identifier")
       }
@@ -136,17 +149,32 @@ object Task {
 
     def containerName(taskId: String): Option[String] = {
       taskId match {
+        case ResidentTaskIdWithInstanceIdRegex(runSpecId, prefix, uuid, container, attempt) =>
+          if (container == Names.anonymousContainer) None else Some(container)
         case TaskIdWithInstanceIdRegex(runSpecId, prefix, instanceUuid, maybeContainer) =>
           if (maybeContainer == Names.anonymousContainer) None else Some(maybeContainer)
+        case ResidentTaskIdRegex(runSpecId, _, uuid, _, attempt) => None
         case LegacyTaskIdRegex(runSpecId, uuid) => None
         case _ => throw new MatchError(s"taskId $taskId is no valid identifier")
       }
     }
 
+    def attempt(taskId: String): Option[Long] = {
+      taskId match {
+        case ResidentTaskIdWithInstanceIdRegex(runSpecId, prefix, uuid, container, attempt) => Some(attempt.toLong)
+        case ResidentTaskIdRegex(runSpecId, _, uuid, _, attempt) => Some(attempt.toLong)
+        case _ => None
+      }
+    }
+
     def instanceId(taskId: String): Instance.Id = {
       taskId match {
+        case ResidentTaskIdWithInstanceIdRegex(runSpecId, prefix, uuid, container, attempt) =>
+          Instance.Id(runSpecId + "." + prefix + uuid)
         case TaskIdWithInstanceIdRegex(runSpecId, prefix, instanceUuid, uuid) =>
           Instance.Id(runSpecId + "." + prefix + instanceUuid)
+        case ResidentTaskIdRegex(runSpecId, _, uuid, _, attempt) =>
+          Instance.Id(runSpecId + "." + calculateLegacyExecutorId(uuid))
         case LegacyTaskIdRegex(runSpecId, uuid) =>
           Instance.Id(runSpecId + "." + calculateLegacyExecutorId(uuid))
         case _ => throw new MatchError(s"taskId $taskId is no valid identifier")
@@ -155,13 +183,55 @@ object Task {
 
     def apply(mesosTaskId: MesosProtos.TaskID): Id = new Id(mesosTaskId.getValue)
 
+    /**
+      * Create a taskId according to the old schema (no instance designator, no mesos container name).
+      * Use this when needing to create an ID for a normal App task or a task for initial reservation handling.
+      *
+      * Use @forResidentTask when you want to launch a task on an existing reservation.
+      */
     def forRunSpec(id: PathId): Id = {
       val taskId = id.safePath + "." + uuidGenerator.generate()
       Task.Id(taskId)
     }
 
+    /**
+      * Create a taskId for a pod instance's task. This will create a taskId designating the instance and each
+      * task container's name.
+      * @param instanceId the ID of the instance that this task is contained in
+      * @param container the name of the task as per the pod container config.
+      */
     def forInstanceId(instanceId: Instance.Id, container: Option[MesosContainer]): Id =
       Id(instanceId.idString + "." + container.map(c => c.name).getOrElse(Names.anonymousContainer))
+
+    /**
+      * Create a taskId for a resident task launch. This will append or increment a launch attempt count that might
+      * contained within the given taskId, and will be part of the resulting taskId.
+      *
+      * Example: app.b6ff5fa5-7714-11e7-a55c-5ecf1c4671f6 results in app.b6ff5fa5-7714-11e7-a55c-5ecf1c4671f6.1
+      * Example: app.b6ff5fa5-7714-11e7-a55c-5ecf1c4671f6.41 results in app.b6ff5fa5-7714-11e7-a55c-5ecf1c4671f6.42
+      * @param taskId The ID of the previous task that was used to match offers.
+      */
+    def forResidentTask(taskId: Task.Id): Task.Id = {
+      taskId.idString match {
+        case ResidentTaskIdWithInstanceIdRegex(runSpecId, prefix, uuid, container, attempt) =>
+          val newAttempt = attempt.toLong + 1
+          val newIdString = s"$runSpecId.$prefix$uuid.$container.$newAttempt"
+          Task.Id(newIdString)
+        case ResidentTaskIdRegex(runSpecId, separator1, uuid, separator2, attempt) =>
+          val newAttempt = attempt.toLong + 1
+          val newIdString = s"$runSpecId$separator1$uuid$separator2$newAttempt"
+          Task.Id(newIdString)
+        // this is the fallback case and must come second to prevent changing the existing regex
+        case LegacyTaskIdRegex(runSpecId, uuid) =>
+          // the initial dummy task created when reserving does not have an attempt count
+          // when actually launching a task based on a reservation, we consider this attempt #1
+          val newIdString = taskId.idString + ResidentTaskIdAttemptSeparator + "1"
+          Task.Id(newIdString)
+        case _ =>
+          // TODO we cannot really handle this but throwing an exception here is no good.
+          throw new RuntimeException(s"$taskId is no valid resident taskId")
+      }
+    }
 
     implicit val taskIdFormat = Format(
       Reads.of[String](Reads.minLength[String](3)).map(Task.Id(_)),
@@ -173,11 +243,11 @@ object Task {
     def calculateLegacyExecutorId(taskId: String): String = s"marathon-$taskId"
   }
 
-  case class LocalVolume(id: LocalVolumeId, persistentVolume: PersistentVolume)
+  case class LocalVolume(id: LocalVolumeId, persistentVolume: PersistentVolume, mount: VolumeMount)
 
-  case class LocalVolumeId(runSpecId: PathId, containerPath: String, uuid: String) {
+  case class LocalVolumeId(runSpecId: PathId, name: String, uuid: String) {
     import LocalVolumeId._
-    lazy val idString = runSpecId.safePath + delimiter + containerPath + delimiter + uuid
+    lazy val idString = runSpecId.safePath + delimiter + name + delimiter + uuid
 
     override def toString: String = s"LocalVolume [$idString]"
   }
@@ -187,11 +257,13 @@ object Task {
     private val delimiter = "#"
     private val LocalVolumeEncoderRE = s"^([^$delimiter]+)[$delimiter]([^$delimiter]+)[$delimiter]([^$delimiter]+)$$".r
 
-    def apply(runSpecId: PathId, volume: PersistentVolume): LocalVolumeId =
-      LocalVolumeId(runSpecId, volume.containerPath, uuidGenerator.generate().toString)
+    def apply(runSpecId: PathId, volume: PersistentVolume, mount: VolumeMount): LocalVolumeId = {
+      val name = volume.name.getOrElse(mount.mountPath)
+      LocalVolumeId(runSpecId, name, uuidGenerator.generate().toString)
+    }
 
     def unapply(id: String): Option[(LocalVolumeId)] = id match {
-      case LocalVolumeEncoderRE(runSpec, path, uuid) => Some(LocalVolumeId(PathId.fromSafePath(runSpec), path, uuid))
+      case LocalVolumeEncoderRE(runSpec, name, uuid) => Some(LocalVolumeId(PathId.fromSafePath(runSpec), name, uuid))
       case _ => None
     }
 
@@ -204,7 +276,7 @@ object Task {
     implicit val localVolumeIdWriter = Writes[LocalVolumeId] { localVolumeId =>
       JsObject(Seq(
         "runSpecId" -> Json.toJson(localVolumeId.runSpecId),
-        "containerPath" -> Json.toJson(localVolumeId.containerPath),
+        "containerPath" -> Json.toJson(localVolumeId.name),
         "uuid" -> Json.toJson(localVolumeId.uuid),
         "persistenceId" -> Json.toJson(localVolumeId.idString)
       ))
@@ -405,6 +477,13 @@ object Task {
     implicit val reservationFormat = Json.format[Reservation]
   }
 
+  sealed trait ReservedTask extends Task {
+    val taskId: Task.Id
+    val reservation: Reservation
+    val status: Status
+    val runSpecVersion: Timestamp
+  }
+
   /**
     * A Reserved task carries the information of reserved resources and persistent volumes
     * and is currently not launched.
@@ -416,30 +495,50 @@ object Task {
       taskId: Task.Id,
       reservation: Reservation,
       status: Status,
-      runSpecVersion: Timestamp) extends Task {
+      runSpecVersion: Timestamp) extends ReservedTask {
 
     override def reservationWithVolumes: Option[Reservation] = Some(reservation)
 
+    private def toLaunchedOnReservation(
+      taskId: Task.Id,
+      reservation: Reservation = reservation,
+      status: Status = status,
+      runSpecVersion: Timestamp = runSpecVersion) = {
+      LaunchedOnReservation(
+        taskId = taskId,
+        reservation = reservation,
+        status = status,
+        runSpecVersion = runSpecVersion)
+    }
+
     override def update(op: TaskUpdateOperation): TaskUpdateEffect = op match {
-      case TaskUpdateOperation.LaunchOnReservation(newRunSpecVersion, taskStatus) =>
-        val updatedTask = LaunchedOnReservation(
-          taskId, newRunSpecVersion, taskStatus, reservation)
+      case TaskUpdateOperation.LaunchOnReservation(newTaskId, newRunSpecVersion, taskStatus) =>
+        val updatedTask = toLaunchedOnReservation(
+          taskId = newTaskId,
+          runSpecVersion = newRunSpecVersion,
+          status = taskStatus)
         TaskUpdateEffect.Update(updatedTask)
 
       case update: TaskUpdateOperation.MesosUpdate =>
-        TaskUpdateEffect.Failure("Mesos task status updates cannot be applied to reserved tasks")
+        /* There are small edge cases in which Marathon thinks a resident task is reserved but it is actually running
+         * (restore ZK backup, for example). If Mesos says that it's running, then transition accordingly */
+        if (update.condition.isActive)
+          TaskUpdateEffect.Update(
+            toLaunchedOnReservation(
+              taskId = taskId,
+              status = status.copy(
+                startedAt = Some(update.now),
+                mesosStatus = Some(update.taskStatus))))
+        else
+          TaskUpdateEffect.Noop
     }
-  }
-
-  object Reserved {
-    implicit val reservedFormat = Json.format[Reserved]
   }
 
   case class LaunchedOnReservation(
       taskId: Task.Id,
       runSpecVersion: Timestamp,
       status: Status,
-      reservation: Reservation) extends Task {
+      reservation: Reservation) extends ReservedTask {
 
     import LaunchedOnReservation.log
 
@@ -461,11 +560,13 @@ object Task {
 
       // case 1: now running
       case TaskUpdateOperation.MesosUpdate(Condition.Running, mesosStatus, now) if !hasStartedRunning =>
+        val updatedNetworkInfo = status.networkInfo.update(mesosStatus)
         val updated = copy(
           status = status.copy(
             startedAt = Some(now),
             mesosStatus = Some(mesosStatus),
-            condition = Condition.Running))
+            condition = Condition.Running,
+            networkInfo = updatedNetworkInfo))
         TaskUpdateEffect.Update(updated)
 
       // case 2: terminal
@@ -483,11 +584,14 @@ object Task {
         TaskUpdateEffect.Update(updatedTask)
 
       // case 3: health or state updated
-      case TaskUpdateOperation.MesosUpdate(newStatus, mesosUpdate, _) =>
-        updatedHealthOrState(status.mesosStatus, mesosUpdate).map { newTaskStatus =>
+      case TaskUpdateOperation.MesosUpdate(newStatus, mesosStatus, _) =>
+        updatedHealthOrState(status.mesosStatus, mesosStatus).map { newTaskStatus =>
+          val updatedNetworkInfo = status.networkInfo.update(mesosStatus)
           val updatedTask = copy(status = status.copy(
             mesosStatus = Some(newTaskStatus),
-            condition = newStatus))
+            condition = newStatus,
+            networkInfo = updatedNetworkInfo
+          ))
           TaskUpdateEffect.Update(newState = updatedTask)
         } getOrElse {
           log.debug("Ignoring status update for {}. Status did not change.", taskId)
@@ -498,7 +602,6 @@ object Task {
 
   object LaunchedOnReservation {
     private val log = LoggerFactory.getLogger(getClass)
-    implicit val launchedOnReservationFormat = Json.format[LaunchedOnReservation]
   }
 
   /** returns the new status if the health status has been added or changed, or if the state changed */
@@ -519,7 +622,8 @@ object Task {
     }
   }
 
-  def reservedTasks(tasks: Iterable[Task]): Seq[Task.Reserved] = tasks.collect { case r: Task.Reserved => r }(collection.breakOut)
+  def reservedTasks(tasks: Iterable[Task]): Seq[Task.Reserved] =
+    tasks.collect { case r: Task.Reserved => r }(collection.breakOut)
 
   implicit class TaskStatusComparison(val task: Task) extends AnyVal {
     def isReserved: Boolean = task.status.condition == Condition.Reserved
@@ -542,14 +646,36 @@ object Task {
   }
 
   implicit object TaskFormat extends Format[Task] {
+    private val reservedTaskReader: Reads[ReservedTask] = (
+      (__ \ "taskId").read[Task.Id] ~
+      (__ \ "reservation").read[Reservation] ~
+      (__ \ "status").read[Status] ~
+      (__ \ "runSpecVersion").read[Timestamp]
+    ) { (taskId, reservation, status, runSpecVersion) =>
+        if (status.condition == Condition.Reserved) {
+          Reserved(taskId, reservation, status, runSpecVersion)
+        } else {
+          LaunchedOnReservation(taskId, runSpecVersion, status, reservation)
+        }
+      }
+
+    private val reservedTaskWriter: Writes[ReservedTask] = {
+      (
+        (__ \ "taskId").write[Task.Id] ~
+        (__ \ "reservation").write[Reservation] ~
+        (__ \ "status").write[Status] ~
+        (__ \ "runSpecVersion").write[Timestamp]
+      ) { r =>
+          (r.taskId, r.reservation, r.status, r.runSpecVersion)
+        }
+    }
     override def reads(json: JsValue): JsResult[Task] = {
-      json.validate[LaunchedEphemeral].orElse(json.validate[Reserved]).orElse(json.validate[LaunchedOnReservation])
+      json.validate(reservedTaskReader).orElse(json.validate[LaunchedEphemeral])
     }
 
     override def writes(o: Task): JsValue = o match {
       case f: LaunchedEphemeral => Json.toJson(f)(LaunchedEphemeral.launchedEphemeralFormat)
-      case r: Reserved => Json.toJson(r)(Reserved.reservedFormat)
-      case lr: LaunchedOnReservation => Json.toJson(lr)(LaunchedOnReservation.launchedOnReservationFormat)
+      case r: ReservedTask => Json.toJson(r)(reservedTaskWriter)
     }
   }
 }

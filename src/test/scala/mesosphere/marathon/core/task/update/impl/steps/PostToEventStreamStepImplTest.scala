@@ -3,12 +3,13 @@ package core.task.update.impl.steps
 
 import akka.event.EventStream
 import mesosphere.UnitTest
-import mesosphere.marathon.core.base.ConstantClock
+import mesosphere.marathon.test.SettableClock
 import mesosphere.marathon.core.condition.Condition
 import mesosphere.marathon.core.event.{ InstanceHealthChanged, MarathonEvent }
 import mesosphere.marathon.core.instance.Instance.InstanceState
 import mesosphere.marathon.core.instance.update._
 import mesosphere.marathon.core.instance.Instance
+import mesosphere.marathon.state.UnreachableStrategy
 
 import scala.collection.immutable.Seq
 
@@ -100,14 +101,17 @@ class PostToEventStreamStepImplTest extends UnitTest {
   }
 
   class Fixture {
-    val clock = ConstantClock()
+    val clock = new SettableClock()
 
     val event1 = mock[MarathonEvent]
     val event2 = mock[MarathonEvent]
 
-    val agentInfo = Instance.AgentInfo("localhost", None, Seq.empty)
+    val agentInfo = Instance.AgentInfo("localhost", None, None, None, Seq.empty)
     val instanceState = InstanceState(Condition.Running, clock.now(), Some(clock.now()), healthy = None)
-    val instance = Instance(Instance.Id("foobar.instance-baz"), agentInfo, instanceState, Map.empty, clock.now())
+    val instance = Instance(
+      Instance.Id("foobar.instance-baz"), agentInfo, instanceState, Map.empty, clock.now(),
+      UnreachableStrategy.default()
+    )
     val eventStream = mock[EventStream]
 
     val step = new PostToEventStreamStepImpl(eventStream)

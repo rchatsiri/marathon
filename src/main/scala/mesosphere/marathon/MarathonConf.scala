@@ -1,9 +1,10 @@
 package mesosphere.marathon
 
+import mesosphere.marathon.core.deployment.DeploymentConfig
 import mesosphere.marathon.core.event.EventConf
 import mesosphere.marathon.core.flow.{ LaunchTokenConfig, ReviveOffersConfig }
-import mesosphere.marathon.core.heartbeat.MesosHeartbeatMonitor
 import mesosphere.marathon.core.group.GroupManagerConfig
+import mesosphere.marathon.core.heartbeat.MesosHeartbeatMonitor
 import mesosphere.marathon.core.launcher.OfferProcessorConfig
 import mesosphere.marathon.core.launchqueue.LaunchQueueConfig
 import mesosphere.marathon.core.matcher.manager.OfferMatcherManagerConfig
@@ -12,11 +13,10 @@ import mesosphere.marathon.core.task.jobs.TaskJobsConfig
 import mesosphere.marathon.core.task.termination.KillConfig
 import mesosphere.marathon.core.task.tracker.InstanceTrackerConfig
 import mesosphere.marathon.core.task.update.TaskStatusUpdateConfig
-import mesosphere.marathon.io.storage.StorageProvider
 import mesosphere.marathon.state.ResourceRole
 import mesosphere.marathon.storage.StorageConf
-import mesosphere.marathon.upgrade.UpgradeConfig
-import org.rogach.scallop.ScallopConf
+import mesosphere.mesos.MatcherConf
+import org.rogach.scallop.{ ScallopConf, ScallopOption }
 
 import scala.sys.SystemProperties
 
@@ -31,11 +31,12 @@ private[marathon] object MarathonConfHostNameCache {
 }
 
 trait MarathonConf
-    extends ScallopConf
-    with EventConf with GroupManagerConfig with LaunchQueueConfig with LaunchTokenConfig with LeaderProxyConf
-    with MarathonSchedulerServiceConfig with OfferMatcherManagerConfig with OfferProcessorConfig
-    with PluginManagerConfiguration with ReviveOffersConfig with StorageConf with KillConfig
-    with TaskJobsConfig with TaskStatusUpdateConfig with InstanceTrackerConfig with UpgradeConfig with ZookeeperConf {
+  extends ScallopConf
+  with EventConf with NetworkConf with GroupManagerConfig with LaunchQueueConfig with LaunchTokenConfig
+  with LeaderProxyConf with MarathonSchedulerServiceConfig with OfferMatcherManagerConfig with OfferProcessorConfig
+  with PluginManagerConfiguration with ReviveOffersConfig with StorageConf with KillConfig
+  with TaskJobsConfig with TaskStatusUpdateConfig with InstanceTrackerConfig with DeploymentConfig with ZookeeperConf
+  with MatcherConf {
 
   lazy val mesosMaster = opt[String](
     "master",
@@ -136,13 +137,13 @@ trait MarathonConf
     default = None
   )
 
-  lazy val accessControlAllowOrigin = opt[String](
+  lazy val accessControlAllowOrigin: ScallopOption[Seq[String]] = opt[String](
     "access_control_allow_origin",
     descr = "The origin(s) to allow in Marathon. Not set by default. " +
       "Example values are \"*\", or " +
       "\"http://localhost:8888, http://domain.com\"",
     noshort = true,
-    default = None)
+    default = None).map(_.split(",").map(_.trim).toVector)
 
   def executor: Executor = Executor.dispatch(defaultExecutor())
 
@@ -237,15 +238,6 @@ trait MarathonConf
     descr = "Framework name to register with Mesos.",
     default = Some("marathon"))
 
-  lazy val artifactStore = opt[String](
-    "artifact_store",
-    descr = "URL to the artifact store. " +
-      s"""Supported store types ${StorageProvider.examples.keySet.mkString(", ")}. """ +
-      s"""Example: ${StorageProvider.examples.values.mkString(", ")}""",
-    validate = StorageProvider.isValidUrl,
-    noshort = true
-  )
-
   lazy val mesosAuthentication = toggle(
     "mesos_authentication",
     default = Some(false),
@@ -280,12 +272,6 @@ trait MarathonConf
     noshort = true
   )
 
-  lazy val defaultNetworkName = opt[String](
-    "default_network_name",
-    descr = "Network name, injected into applications' ipAddress{} specs that do not define their own networkName.",
-    noshort = true
-  )
-
   //Internal settings, that are not intended for external use
 
   lazy val maxApps = opt[Int](
@@ -308,15 +294,6 @@ trait MarathonConf
     default = Some("curator")
   )
 
-  lazy val internalMaxQueuedRootGroupUpdates = opt[Int](
-    "max_queued_root_group_updates",
-    descr = "INTERNAL TUNING PARAMETER: " +
-      "The maximum number of root group updates that we queue before rejecting updates.",
-    noshort = true,
-    hidden = true,
-    default = Some(500)
-  )
-
   lazy val mesosHeartbeatInterval = opt[Long](
     "mesos_heartbeat_interval",
     descr = "(milliseconds) in the absence of receiving a message from the mesos master " +
@@ -332,5 +309,12 @@ trait MarathonConf
     noshort = true,
     hidden = true,
     default = Some(MesosHeartbeatMonitor.DEFAULT_HEARTBEAT_FAILURE_THRESHOLD))
+
+  lazy val drainingSeconds = opt[Long](
+    "draining_seconds",
+    descr = "(Default: 0 seconds) the seconds when marathon will start declining offers before a maintenance " +
+      "window start time. This is only evaluated if `maintenance_mode` is in the set of `enable_features`!",
+    default = Some(0)
+  )
 }
 

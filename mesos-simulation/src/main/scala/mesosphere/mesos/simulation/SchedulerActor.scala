@@ -13,8 +13,8 @@ object SchedulerActor {
   private val log = LoggerFactory.getLogger(getClass)
 
   case class Registered(
-    frameworkId: FrameworkID,
-    master: MasterInfo)
+      frameworkId: FrameworkID,
+      master: MasterInfo)
 
   case class ResourceOffers(offers: Seq[Offer])
 }
@@ -41,7 +41,7 @@ class SchedulerActor(scheduler: Scheduler) extends Actor with Stash {
       scheduler.registered(driver, frameworkId, masterInfo)
 
     case ResourceOffers(offers) =>
-      scheduler.resourceOffers(driver, offers)
+      scheduler.resourceOffers(driver, offers.asJava)
 
     case status: TaskStatus =>
       scheduler.statusUpdate(driver, status)

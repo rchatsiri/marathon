@@ -1,54 +1,58 @@
 package mesosphere.marathon
 package core.task.jobs.impl
 
-import akka.actor.{ Actor, ActorLogging, Cancellable, Props }
-import akka.event.LoggingAdapter
-import akka.pattern.pipe
+import java.time.Clock
 
-import mesosphere.marathon.core.base.Clock
+import akka.actor.{ Actor, Cancellable, Props }
+import akka.pattern.pipe
+import com.typesafe.scalalogging.StrictLogging
 import mesosphere.marathon.core.instance.Instance
 import mesosphere.marathon.core.instance.update.InstanceUpdateOperation
 import mesosphere.marathon.core.task.jobs.TaskJobsConfig
-import mesosphere.marathon.core.task.tracker.{ InstanceTracker, TaskStateOpProcessor }
+import mesosphere.marathon.core.task.tracker.{ InstanceTracker, InstanceStateOpProcessor }
 import mesosphere.marathon.core.task.tracker.InstanceTracker.SpecInstances
-import mesosphere.marathon.state.{ PathId, Timestamp }
+import mesosphere.marathon.state.{ PathId, Timestamp, UnreachableDisabled, UnreachableEnabled }
 
 /**
   * Business logic of overdue tasks actor.
   *
   * Factoring out into a trait makes testing simpler.
   */
-trait ExpungeOverdueLostTasksActorLogic {
+trait ExpungeOverdueLostTasksActorLogic extends StrictLogging {
 
-  def log: LoggingAdapter
   val config: TaskJobsConfig
   val clock: Clock
-  val stateOpProcessor: TaskStateOpProcessor
+  val stateOpProcessor: InstanceStateOpProcessor
 
   def triggerExpunge(instance: Instance): Unit = {
     val since = instance.state.since
-    log.warning(s"Instance ${instance.instanceId} is unreachable since $since and will be expunged.")
+    logger.warn(s"Instance ${instance.instanceId} is unreachable since $since and will be expunged.")
     val stateOp = InstanceUpdateOperation.ForceExpunge(instance.instanceId)
     stateOpProcessor.process(stateOp)
   }
 
   /**
-    * @return instances that have been UnreachableInactive according to the RunSpec definition.
+    * @return instances that should be expunged according to the RunSpec definition.
     */
-  def filterOverdueUnreachableInactive(instances: Map[PathId, SpecInstances], now: Timestamp) =
-    instances.values.flatMap(_.instances)
-      .withFilter(_.isUnreachableInactive)
-      .withFilter { instance =>
-        val unreachableExpungeAfter = instance.unreachableStrategy.expungeAfter
-        instance.tasksMap.valuesIterator.exists(_.isUnreachableExpired(now, unreachableExpungeAfter))
-      }
+  def filterUnreachableForExpunge(instances: Map[PathId, SpecInstances], now: Timestamp) =
+    instances.values.
+      flatMap(_.instances).
+      withFilter { i => shouldExpunge(i, now) }
+
+  private[impl] def shouldExpunge(instance: Instance, now: Timestamp): Boolean = instance.unreachableStrategy match {
+    case UnreachableDisabled =>
+      false
+    case unreachableEnabled: UnreachableEnabled =>
+      instance.isUnreachableInactive &&
+        instance.tasksMap.valuesIterator.exists(_.isUnreachableExpired(now, unreachableEnabled.expungeAfter))
+  }
 }
 
 class ExpungeOverdueLostTasksActor(
     val clock: Clock,
     val config: TaskJobsConfig,
     instanceTracker: InstanceTracker,
-    val stateOpProcessor: TaskStateOpProcessor) extends Actor with ActorLogging with ExpungeOverdueLostTasksActorLogic {
+    val stateOpProcessor: InstanceStateOpProcessor) extends Actor with StrictLogging with ExpungeOverdueLostTasksActorLogic {
 
   import ExpungeOverdueLostTasksActor._
   implicit val ec = context.dispatcher
@@ -56,7 +60,7 @@ class ExpungeOverdueLostTasksActor(
   var tickTimer: Option[Cancellable] = None
 
   override def preStart(): Unit = {
-    log.info("ExpungeOverdueLostTasksActor has started")
+    logger.info("ExpungeOverdueLostTasksActor has started")
     tickTimer = Some(context.system.scheduler.schedule(
       config.taskLostExpungeInitialDelay,
       config.taskLostExpungeInterval, self, Tick))
@@ -64,13 +68,13 @@ class ExpungeOverdueLostTasksActor(
 
   override def postStop(): Unit = {
     tickTimer.foreach(_.cancel())
-    log.info("ExpungeOverdueLostTasksActor has stopped")
+    logger.info("ExpungeOverdueLostTasksActor has stopped")
   }
 
   override def receive: Receive = {
     case Tick => instanceTracker.instancesBySpec() pipeTo self
     case InstanceTracker.InstancesBySpec(instances) =>
-      filterOverdueUnreachableInactive(instances, clock.now()).foreach(triggerExpunge)
+      filterUnreachableForExpunge(instances, clock.now()).foreach(triggerExpunge)
   }
 }
 
@@ -79,7 +83,7 @@ object ExpungeOverdueLostTasksActor {
   case object Tick
 
   def props(clock: Clock, config: TaskJobsConfig,
-    instanceTracker: InstanceTracker, stateOpProcessor: TaskStateOpProcessor): Props = {
+    instanceTracker: InstanceTracker, stateOpProcessor: InstanceStateOpProcessor): Props = {
     Props(new ExpungeOverdueLostTasksActor(clock, config, instanceTracker, stateOpProcessor))
   }
 }

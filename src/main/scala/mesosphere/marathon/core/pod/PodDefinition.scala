@@ -2,6 +2,7 @@ package mesosphere.marathon
 package core.pod
 
 // scalastyle:off
+import mesosphere.marathon.api.v2.PodNormalization
 import mesosphere.marathon.core.task.Task
 import mesosphere.marathon.raml.{ Endpoint, ExecutorResources, Pod, Raml, Resources }
 import mesosphere.marathon.state._
@@ -23,18 +24,34 @@ case class PodDefinition(
     containers: Seq[MesosContainer] = PodDefinition.DefaultContainers,
     instances: Int = PodDefinition.DefaultInstances,
     constraints: Set[Protos.Constraint] = PodDefinition.DefaultConstraints,
-    version: Timestamp = PodDefinition.DefaultVersion,
-    podVolumes: Seq[Volume] = PodDefinition.DefaultVolumes,
+    versionInfo: VersionInfo = VersionInfo.OnlyVersion(PodDefinition.DefaultVersion),
     networks: Seq[Network] = PodDefinition.DefaultNetworks,
     backoffStrategy: BackoffStrategy = PodDefinition.DefaultBackoffStrategy,
     upgradeStrategy: UpgradeStrategy = PodDefinition.DefaultUpgradeStrategy,
     executorResources: Resources = PodDefinition.DefaultExecutorResources,
+    override val volumes: Seq[Volume] = PodDefinition.DefaultVolumes,
     override val unreachableStrategy: UnreachableStrategy = PodDefinition.DefaultUnreachableStrategy,
     override val killSelection: KillSelection = KillSelection.DefaultKillSelection
 ) extends RunSpec with plugin.PodSpec with MarathonState[Protos.Json, PodDefinition] {
 
+  /**
+    * As an optimization, we precompute and cache the hash of this object
+    * This is done to speed up deployment plan computation.
+    */
+  override val hashCode: Int = scala.util.hashing.MurmurHash3.productHash(this)
+
   val endpoints: Seq[Endpoint] = containers.flatMap(_.endpoints)
   val resources = aggregateResources()
+
+  override val volumeMounts: Seq[VolumeMount] = containers.flatMap(_.volumeMounts)
+
+  override val persistentVolumes: Seq[PersistentVolume] = volumes.collect { case pv: PersistentVolume => pv }
+
+  override val persistentVolumeMounts: Seq[VolumeMount] = volumeMounts.filter { mount =>
+    persistentVolumes.exists(_.name == mount.volumeName)
+  }
+
+  override val diskForPersistentVolumes: Double = persistentVolumes.map(_.persistent.size).sum.toDouble
 
   def aggregateResources(filter: MesosContainer => Boolean = _ => true) = Resources(
     cpus = executorResources.cpus + containers.withFilter(filter).map(_.resources.cpus).sum,
@@ -56,7 +73,7 @@ case class PodDefinition(
           secrets != to.secrets ||
           containers != to.containers ||
           constraints != to.constraints ||
-          podVolumes != to.podVolumes ||
+          volumes != to.volumes ||
           networks != to.networks ||
           backoffStrategy != to.backoffStrategy ||
           upgradeStrategy != to.upgradeStrategy
@@ -74,8 +91,7 @@ case class PodDefinition(
     case _ => throw new IllegalStateException("Can't change pod to app")
   }
 
-  // TODO(PODS) versionInfo
-  override val versionInfo: VersionInfo = VersionInfo.OnlyVersion(version)
+  override val version: Timestamp = versionInfo.version
 
   override def mergeFromProto(message: Protos.Json): PodDefinition = {
     Raml.fromRaml(Json.parse(message.getJson).as[Pod])
@@ -93,7 +109,7 @@ case class PodDefinition(
   def container(name: String): Option[MesosContainer] = containers.find(_.name == name)
   def container(taskId: Task.Id): Option[MesosContainer] = taskId.containerName.flatMap(container(_))
   def volume(volumeName: String): Volume =
-    podVolumes.find(_.name == volumeName).getOrElse(
+    volumes.find(_.name.contains(volumeName)).getOrElse(
       throw new IllegalArgumentException(s"volume named $volumeName is unknown to this pod"))
 }
 
@@ -114,9 +130,8 @@ object PodDefinition {
   val DefaultConstraints = Set.empty[Protos.Constraint]
   val DefaultVersion = Timestamp.now()
   val DefaultVolumes = Seq.empty[Volume]
-  val DefaultNetworks = Seq.empty[Network]
+  val DefaultNetworks: Seq[Network] = PodNormalization.DefaultNetworks.map(_.fromRaml)
   val DefaultBackoffStrategy = BackoffStrategy()
   val DefaultUpgradeStrategy = AppDefinition.DefaultUpgradeStrategy
-  val DefaultUnreachableStrategy = UnreachableStrategy.defaultEphemeral
-
+  val DefaultUnreachableStrategy = UnreachableStrategy.default(resident = false)
 }

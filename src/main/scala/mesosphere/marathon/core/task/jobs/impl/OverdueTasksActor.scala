@@ -1,15 +1,17 @@
 package mesosphere.marathon
 package core.task.jobs.impl
 
+import java.time.Clock
+
 import akka.actor._
-import mesosphere.marathon.core.base.Clock
-import mesosphere.marathon.core.task.termination.{ KillReason, KillService }
-import mesosphere.marathon.core.task.Task
-import mesosphere.marathon.core.task.tracker.{ InstanceTracker, TaskStateOpProcessor }
-import mesosphere.marathon.state.Timestamp
+import com.typesafe.scalalogging.StrictLogging
 import mesosphere.marathon.core.condition.Condition
 import mesosphere.marathon.core.instance.Instance
 import mesosphere.marathon.core.instance.update.InstanceUpdateOperation
+import mesosphere.marathon.core.task.Task
+import mesosphere.marathon.core.task.termination.{ KillReason, KillService }
+import mesosphere.marathon.core.task.tracker.{ InstanceTracker, InstanceStateOpProcessor }
+import mesosphere.marathon.state.Timestamp
 import org.slf4j.LoggerFactory
 
 import scala.concurrent.Future
@@ -20,10 +22,10 @@ private[jobs] object OverdueTasksActor {
   def props(
     config: MarathonConf,
     taskTracker: InstanceTracker,
-    taskStateOpProcessor: TaskStateOpProcessor,
+    stateOpProcessor: InstanceStateOpProcessor,
     killService: KillService,
     clock: Clock): Props = {
-    Props(new OverdueTasksActor(new Support(config, taskTracker, taskStateOpProcessor, killService, clock)))
+    Props(new OverdueTasksActor(new Support(config, taskTracker, stateOpProcessor, killService, clock)))
   }
 
   /**
@@ -32,16 +34,14 @@ private[jobs] object OverdueTasksActor {
   private class Support(
       config: MarathonConf,
       taskTracker: InstanceTracker,
-      taskStateOpProcessor: TaskStateOpProcessor,
+      stateOpProcessor: InstanceStateOpProcessor,
       killService: KillService,
-      clock: Clock) {
-    import scala.concurrent.ExecutionContext.Implicits.global
-
-    private[this] val log = LoggerFactory.getLogger(getClass)
+      clock: Clock) extends StrictLogging {
+    import mesosphere.marathon.core.async.ExecutionContexts.global
 
     def check(): Future[Unit] = {
       val now = clock.now()
-      log.debug("checking for overdue tasks")
+      logger.debug("Checking for overdue tasks")
       taskTracker.instancesBySpec().flatMap { tasksByApp =>
         val instances = tasksByApp.allInstances
 
@@ -53,7 +53,7 @@ private[jobs] object OverdueTasksActor {
 
     private[this] def killOverdueInstances(now: Timestamp, instances: Seq[Instance]): Unit = {
       overdueTasks(now, instances).foreach { overdueTask =>
-        log.info("Killing overdue {}", overdueTask.instanceId)
+        logger.info(s"Killing overdue ${overdueTask.instanceId}")
         killService.killInstance(overdueTask, KillReason.Overdue)
       }
     }
@@ -66,12 +66,12 @@ private[jobs] object OverdueTasksActor {
       def launchedAndExpired(task: Task): Boolean = {
         task.status.condition match {
           case Condition.Created | Condition.Starting if task.status.stagedAt < unconfirmedExpire =>
-            log.warn(s"Should kill: ${task.taskId} was launched " +
+            logger.warn(s"Should kill: ${task.taskId} was launched " +
               s"${task.status.stagedAt.until(now).toSeconds}s ago and was not confirmed yet")
             true
 
           case Condition.Staging if task.status.stagedAt < stagedExpire =>
-            log.warn(s"Should kill: ${task.taskId} was staged ${task.status.stagedAt.until(now).toSeconds}s" +
+            logger.warn(s"Should kill: ${task.taskId} was staged ${task.status.stagedAt.until(now).toSeconds}s" +
               " ago and has not yet started")
             true
 
@@ -87,8 +87,8 @@ private[jobs] object OverdueTasksActor {
 
     private[this] def timeoutOverdueReservations(now: Timestamp, instances: Seq[Instance]): Future[Unit] = {
       val taskTimeoutResults = overdueReservations(now, instances).map { instance =>
-        log.warn("Scheduling ReservationTimeout for {}", instance.instanceId)
-        taskStateOpProcessor.process(InstanceUpdateOperation.ReservationTimeout(instance.instanceId))
+        logger.warn("Scheduling ReservationTimeout for {}", instance.instanceId)
+        stateOpProcessor.process(InstanceUpdateOperation.ReservationTimeout(instance.instanceId))
       }
       Future.sequence(taskTimeoutResults).map(_ => ())
     }
@@ -133,7 +133,7 @@ private class OverdueTasksActor(support: OverdueTasksActor.Support) extends Acto
 
         case None =>
           import context.dispatcher
-          resultFuture.onFailure { case NonFatal(e) => log.warn("error while checking for overdue tasks", e) }
+          resultFuture.failed.foreach { case NonFatal(e) => log.warn("error while checking for overdue tasks", e) }
       }
   }
 }

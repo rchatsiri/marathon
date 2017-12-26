@@ -1,0 +1,98 @@
+#%RAML 1.0 Library
+uses:
+  health: healthCheck.raml
+  numbers: numberTypes.raml
+  strings: stringTypes.raml
+
+types:
+
+  Timeout:
+    type: object
+    properties:
+      initiated: datetime
+      deadline: datetime
+      reason:
+        type: string
+        enum:
+          - RelaunchEscalationTimeout
+          - ReservationTimeout
+
+  State:
+    type: object
+    properties:
+      name: string
+      timeout?: Timeout
+
+  Reservation:
+    type: object
+    properties:
+      volumeIds: LocalVolumeId[]
+      state: State
+
+  NetworkInfoIPAddress:
+    type: object
+    properties:
+      ipAddress: string
+      protocol: strings.IpProtocol
+
+  NetworkInfo:
+    type: object
+    properties:
+      hostName: string
+      hostPorts: integer[]
+      ipAddresses: NetworkInfoIPAddress[]
+
+  Status:
+    type: object
+    properties:
+      stagedAt: datetime
+      startedAt?: datetime
+      mesosStatus?: string
+      condition: strings.Condition
+      networkInfo: NetworkInfo
+
+  # Not to be confused with network.IpAddress
+  IpAddr:
+    type: object
+    properties:
+      ipAddress: string
+      protocol: strings.IpProtocol
+
+  LocalVolumeId:
+    type: object
+    properties:
+      runSpecId: strings.PathId
+      containerPath: string
+      uuid: string
+      persistenceId: strings.PersistenceId
+
+  Task:
+    type: object
+    properties:
+      appId: strings.PathId
+      healthCheckResults?: health.Health[]
+      host: string
+      id: string
+      ipAddresses?: IpAddr[]
+      ports?: numbers.Port[]
+      servicePorts?: numbers.Port[]
+      slaveId?: string
+      state: strings.MesosTaskState
+      stagedAt?: string
+      startedAt?: string
+      version?: string
+      localVolumes?: LocalVolumeId[]
+
+  TaskSingle:
+    type: object
+    properties:
+      task: Task
+
+  TaskList:
+    type: object
+    properties:
+      tasks: Task[]
+
+  TaskStatusCondition:
+    type: string
+    enum: [ running, staging ]

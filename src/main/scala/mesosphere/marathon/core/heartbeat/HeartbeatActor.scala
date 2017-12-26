@@ -1,4 +1,5 @@
-package mesosphere.marathon.core.heartbeat
+package mesosphere.marathon
+package core.heartbeat
 
 import akka.actor._
 import scala.concurrent.duration._
@@ -138,7 +139,7 @@ private[heartbeat] object HeartbeatInternal {
 
   /** @constructor capture the state of an active heartbeat monitor */
   case class DataActive(
-    reactor: Reactor,
-    sessionToken: AnyRef,
-    missed: Int = 0) extends Data
+      reactor: Reactor,
+      sessionToken: AnyRef,
+      missed: Int = 0) extends Data
 }

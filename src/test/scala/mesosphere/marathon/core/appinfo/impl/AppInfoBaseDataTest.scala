@@ -3,8 +3,9 @@ package core.appinfo.impl
 
 import mesosphere.UnitTest
 import mesosphere.marathon.core.appinfo.{ AppInfo, EnrichedTask, TaskCounts, TaskStatsByVersion }
-import mesosphere.marathon.core.base.ConstantClock
+import mesosphere.marathon.test.SettableClock
 import mesosphere.marathon.core.condition.Condition
+import mesosphere.marathon.core.deployment.{ DeploymentPlan, DeploymentStep, DeploymentStepInfo }
 import mesosphere.marathon.core.group.GroupManager
 import mesosphere.marathon.core.health.{ Health, HealthCheckManager }
 import mesosphere.marathon.core.instance.Instance.InstanceState
@@ -18,8 +19,6 @@ import mesosphere.marathon.raml.Resources
 import mesosphere.marathon.state._
 import mesosphere.marathon.storage.repository.TaskFailureRepository
 import mesosphere.marathon.test.GroupCreation
-import mesosphere.marathon.upgrade.DeploymentManager.DeploymentStepInfo
-import mesosphere.marathon.upgrade.{ DeploymentPlan, DeploymentStep }
 import play.api.libs.json.Json
 
 import scala.collection.immutable.{ Map, Seq }
@@ -30,7 +29,7 @@ class AppInfoBaseDataTest extends UnitTest with GroupCreation {
 
   class Fixture {
     val runSpecId = PathId("/test")
-    lazy val clock = ConstantClock()
+    lazy val clock = new SettableClock()
     lazy val instanceTracker = mock[InstanceTracker]
     lazy val healthCheckManager = mock[HealthCheckManager]
     lazy val marathonSchedulerService = mock[MarathonSchedulerService]
@@ -77,8 +76,8 @@ class AppInfoBaseDataTest extends UnitTest with GroupCreation {
     "requesting an app with 0 instances" in {
       val f = new Fixture
       Given("one app with 0 instances")
-      import scala.concurrent.ExecutionContext.Implicits.global
-      f.instanceTracker.instancesBySpec()(global) returns
+      import mesosphere.marathon.core.async.ExecutionContexts.global
+      f.instanceTracker.instancesBySpec() returns
         Future.successful(InstanceTracker.InstancesBySpec.of(InstanceTracker.SpecInstances.forInstances(app.id, Seq.empty[Instance])))
       f.healthCheckManager.statuses(app.id) returns Future.successful(Map.empty[Instance.Id, Seq[Health]])
 
@@ -97,8 +96,8 @@ class AppInfoBaseDataTest extends UnitTest with GroupCreation {
       val task1: Task = instance1.appTask
       val task2: Task = instance2.appTask
 
-      import scala.concurrent.ExecutionContext.Implicits.global
-      f.instanceTracker.instancesBySpec()(global) returns
+      import mesosphere.marathon.core.async.ExecutionContexts.global
+      f.instanceTracker.instancesBySpec() returns
         Future.successful(InstanceTracker.InstancesBySpec.of(InstanceTracker.SpecInstances.forInstances(app.id, Seq(instance1, instance2))))
       f.healthCheckManager.statuses(app.id) returns Future.successful(Map.empty[Instance.Id, Seq[Health]])
 
@@ -120,8 +119,8 @@ class AppInfoBaseDataTest extends UnitTest with GroupCreation {
       val running2: Instance = builder2.getInstance()
       val running3: Instance = builder3.getInstance()
 
-      import scala.concurrent.ExecutionContext.Implicits.global
-      f.instanceTracker.instancesBySpec()(global) returns
+      import mesosphere.marathon.core.async.ExecutionContexts.global
+      f.instanceTracker.instancesBySpec() returns
         Future.successful(InstanceTracker.InstancesBySpec.of(InstanceTracker.SpecInstances.forInstances(app.id, Seq(builder1.getInstance(), builder2.getInstance(), builder3.getInstance()))))
 
       val alive = Health(running2.instanceId, lastSuccess = Some(Timestamp(1)))
@@ -155,7 +154,7 @@ class AppInfoBaseDataTest extends UnitTest with GroupCreation {
       )))
 
       And("the taskTracker should have been called")
-      verify(f.instanceTracker, times(1)).instancesBySpec()(global)
+      verify(f.instanceTracker, times(1)).instancesBySpec()
 
       And("the healthCheckManager as well")
       verify(f.healthCheckManager, times(1)).statuses(app.id)
@@ -176,8 +175,8 @@ class AppInfoBaseDataTest extends UnitTest with GroupCreation {
       val running2Builder = TestInstanceBuilder.newBuilder(f.runSpecId).addTaskRunning()
       val running2: Instance = running2Builder.getInstance()
 
-      import scala.concurrent.ExecutionContext.Implicits.global
-      f.instanceTracker.instancesBySpec()(global) returns
+      import mesosphere.marathon.core.async.ExecutionContexts.global
+      f.instanceTracker.instancesBySpec() returns
         Future.successful(InstanceTracker.InstancesBySpec.of(InstanceTracker.SpecInstances.forInstances(app.id, Seq(stagedBuilder.getInstance(), runningBuilder.getInstance(), running2Builder.getInstance()))))
 
       f.healthCheckManager.statuses(app.id) returns Future.successful(
@@ -197,7 +196,7 @@ class AppInfoBaseDataTest extends UnitTest with GroupCreation {
       )))
 
       And("the taskTracker should have been called")
-      verify(f.instanceTracker, times(1)).instancesBySpec()(global)
+      verify(f.instanceTracker, times(1)).instancesBySpec()
 
       And("the healthCheckManager as well")
       verify(f.healthCheckManager, times(1)).statuses(app.id)
@@ -328,9 +327,9 @@ class AppInfoBaseDataTest extends UnitTest with GroupCreation {
       val running2Builder = TestInstanceBuilder.newBuilder(f.runSpecId).addTaskRunning(stagedAt = Timestamp((f.clock.now() - 11.seconds).millis))
       val running2: Instance = running2Builder.getInstance()
 
-      import scala.concurrent.ExecutionContext.Implicits.global
+      import mesosphere.marathon.core.async.ExecutionContexts.global
       val instances = Seq(stagedBuilder.getInstance(), runningBuilder.getInstance(), running2Builder.getInstance())
-      f.instanceTracker.instancesBySpec()(global) returns
+      f.instanceTracker.instancesBySpec() returns
         Future.successful(InstanceTracker.InstancesBySpec.of(InstanceTracker.SpecInstances.forInstances(app.id, instances)))
 
       val statuses: Map[Instance.Id, Seq[Health]] = Map(
@@ -360,7 +359,7 @@ class AppInfoBaseDataTest extends UnitTest with GroupCreation {
       }
 
       And("the taskTracker should have been called")
-      verify(f.instanceTracker, times(1)).instancesBySpec()(global)
+      verify(f.instanceTracker, times(1)).instancesBySpec()
 
       And("the healthCheckManager as well")
       verify(f.healthCheckManager, times(1)).statuses(app.id)
@@ -414,27 +413,29 @@ class AppInfoBaseDataTest extends UnitTest with GroupCreation {
 
       Instance(
         instanceId = instanceId,
-        agentInfo = Instance.AgentInfo("", None, Nil),
-        state = InstanceState(None, tasks, f.clock.now()),
+        agentInfo = Instance.AgentInfo("", None, None, None, Nil),
+        state = InstanceState(None, tasks, f.clock.now(), UnreachableStrategy.default()),
         tasksMap = tasks,
-        runSpecVersion = pod.version)
+        runSpecVersion = pod.version,
+        unreachableStrategy = UnreachableStrategy.default()
+      )
     }
 
     "pod statuses xref the correct spec versions" in {
       implicit val f = new Fixture
-      val v1 = f.clock.now()
-      val podspec1 = pod.copy(version = v1)
+      val v1 = VersionInfo.OnlyVersion(f.clock.now())
+      val podspec1 = pod.copy(versionInfo = v1)
 
       f.clock += 1.minute
 
       // the same as podspec1 but with a new version and a renamed container
-      val v2 = f.clock.now()
-      val podspec2 = pod.copy(version = v2, containers = pod.containers.map(_.copy(name = "ct2")))
+      val v2 = VersionInfo.OnlyVersion(f.clock.now())
+      val podspec2 = pod.copy(versionInfo = v2, containers = pod.containers.map(_.copy(name = "ct2")))
 
       Given("multiple versions of the same pod specification")
       def findPodSpecByVersion(version: Timestamp): Option[PodDefinition] = {
-        if (v1 == version) Some(podspec1)
-        else if (v2 == version) Some(podspec2)
+        if (v1.version == version) Some(podspec1)
+        else if (v2.version == version) Some(podspec2)
         else Option.empty[PodDefinition]
       }
 
@@ -462,11 +463,31 @@ class AppInfoBaseDataTest extends UnitTest with GroupCreation {
       }
 
       And("instance referring to a bogus version doesn't have any status")
-      val v3 = f.clock.now()
-      val instanceV3 = fakeInstance(pod.copy(version = v3))
+      val v3 = VersionInfo.OnlyVersion(f.clock.now())
+      val instanceV3 = fakeInstance(pod.copy(versionInfo = v3))
       val maybeStatus3 = f.baseData.podInstanceStatus(instanceV3)(findPodSpecByVersion)
 
       maybeStatus3 should be ('empty)
+    }
+
+    "pod status for instances already removed from the group repo doesn't throw an exception" in { //DCOS-16151
+      implicit val f = new Fixture
+
+      Given("a pod definition")
+      val instance1 = fakeInstance(pod)
+
+      import mesosphere.marathon.core.async.ExecutionContexts.global
+      f.instanceTracker.instancesBySpec() returns
+        Future.successful(InstanceTracker.InstancesBySpec.of(InstanceTracker.SpecInstances.forInstances(pod.id, Seq(instance1))))
+
+      And("with no instances in the repo")
+      f.groupManager.podVersion(any, any) returns Future.successful(None)
+      f.marathonSchedulerService.listRunningDeployments() returns Future.successful(Seq.empty)
+
+      When("requesting pod status")
+      val status = f.baseData.podStatus(pod).futureValue
+
+      Then("no exception was thrown so status was successfully fetched")
     }
   }
 }

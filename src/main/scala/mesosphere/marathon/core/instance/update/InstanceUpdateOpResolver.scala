@@ -1,8 +1,9 @@
 package mesosphere.marathon
 package core.instance.update
 
+import java.time.Clock
+
 import com.typesafe.scalalogging.StrictLogging
-import mesosphere.marathon.core.base.Clock
 import mesosphere.marathon.core.instance.Instance
 import mesosphere.marathon.core.instance.update.InstanceUpdateOperation._
 import mesosphere.marathon.core.task.tracker.InstanceTracker
@@ -46,7 +47,13 @@ private[marathon] class InstanceUpdateOpResolver(
         createInstance(op.instanceId)(updater.reserve(op, clock.now()))
 
       case op: ForceExpunge =>
-        updateExistingInstance(op.instanceId)(updater.forceExpunge(_, clock.now()))
+        directInstanceTracker.instance(op.instanceId).map {
+          case Some(existingInstance) =>
+            updater.forceExpunge(existingInstance, clock.now())
+
+          case None =>
+            InstanceUpdateEffect.Noop(op.instanceId)
+        }
 
       case op: Revert =>
         Future.successful(updater.revert(op.instance))

@@ -2,13 +2,16 @@ package mesosphere.marathon
 package integration.facades
 
 import akka.actor.ActorSystem
+import akka.http.scaladsl.client.RequestBuilding.{ Get, Post }
+import akka.http.scaladsl.model.HttpResponse
+import akka.stream.Materializer
+import com.typesafe.scalalogging.StrictLogging
+import de.heikoseeberger.akkahttpplayjson.PlayJsonSupport
 import mesosphere.marathon.integration.setup.RestResult
-import mesosphere.marathon.integration.setup.SprayHttpResponse._
-import spray.client.pipelining._
-import spray.http.HttpResponse
-import spray.httpx.PlayJsonSupport
+import mesosphere.marathon.integration.setup.AkkaHttpResponse._
 
 import scala.concurrent.Await._
+import scala.concurrent.Future
 import scala.concurrent.duration._
 
 object MesosFacade {
@@ -17,20 +20,35 @@ object MesosFacade {
     * Corresponds to parts of `state.json`.
     */
   case class ITMesosState(
-    version: String,
-    gitTag: Option[String],
-    agents: Seq[ITAgent])
+      version: String,
+      gitTag: Option[String],
+      agents: Seq[ITAgent])
 
   case class ITAgent(
-    id: String,
-    resources: ITResources,
-    usedResources: ITResources,
-    offeredResources: ITResources,
-    reservedResourcesByRole: Map[String, ITResources],
-    unreservedResources: ITResources)
+      id: String,
+      attributes: ITAttributes,
+      resources: ITResources,
+      usedResources: ITResources,
+      offeredResources: ITResources,
+      reservedResourcesByRole: Map[String, ITResources],
+      unreservedResources: ITResources)
+
+  case class ITAttributes(attributes: Map[String, ITResourceValue])
+
+  object ITAttributes {
+    def empty: ITAttributes = new ITAttributes(Map.empty)
+    def apply(vals: (String, Any)*): ITAttributes = {
+      val attributes: Map[String, ITResourceValue] = vals.map {
+        case (id, value: Double) => id -> ITResourceScalarValue(value)
+        case (id, value: String) => id -> ITResourceStringValue(value)
+      }(collection.breakOut)
+      ITAttributes(attributes)
+    }
+  }
 
   case class ITResources(resources: Map[String, ITResourceValue]) {
     def isEmpty: Boolean = resources.isEmpty || resources.values.forall(_.isEmpty)
+    def nonEmpty: Boolean = !isEmpty
 
     override def toString: String = {
       "{" + resources.toSeq.sortBy(_._1).map {
@@ -43,7 +61,7 @@ object MesosFacade {
     def apply(vals: (String, Any)*): ITResources = {
       val resources: Map[String, ITResourceValue] = vals.map {
         case (id, value: Double) => id -> ITResourceScalarValue(value)
-        case (id, portsString: String) => id -> ITResourcePortValue(portsString)
+        case (id, value: String) => id -> ITResourceStringValue(value)
       }(collection.breakOut)
       ITResources(resources)
     }
@@ -56,7 +74,7 @@ object MesosFacade {
     override def isEmpty: Boolean = value == 0
     override def toString: String = value.toString
   }
-  case class ITResourcePortValue(portString: String) extends ITResourceValue {
+  case class ITResourceStringValue(portString: String) extends ITResourceValue {
     override def isEmpty: Boolean = false
     override def toString: String = '"' + portString + '"'
   }
@@ -65,25 +83,27 @@ object MesosFacade {
   case class ITFrameworks(frameworks: Seq[ITFramework])
 }
 
-class MesosFacade(url: String, waitTime: Duration = 30.seconds)(implicit val system: ActorSystem)
-    extends PlayJsonSupport {
+class MesosFacade(url: String, implicit val waitTime: FiniteDuration = 30.seconds)(implicit val system: ActorSystem, materializer: Materializer)
+  extends PlayJsonSupport with StrictLogging {
 
   import MesosFacade._
   import MesosFormats._
   import system.dispatcher
 
   def state: RestResult[ITMesosState] = {
-    val pipeline = sendReceive ~> read[ITMesosState]
-    result(pipeline(Get(s"$url/state.json")), waitTime)
+    logger.info(s"fetching state from $url")
+    result(requestFor[ITMesosState](Get(s"$url/state.json")), waitTime)
   }
 
   def frameworkIds(): RestResult[Seq[String]] = {
-    val pipeline = sendReceive ~> read[ITFrameworks]
-    result(pipeline(Get(s"$url/frameworks")), waitTime).map(_.frameworks.map(_.id))
+    result(requestFor[ITFrameworks](Get(s"$url/frameworks")), waitTime).map(_.frameworks.map(_.id))
   }
 
   def terminate(frameworkId: String): HttpResponse = {
-    val pipeline = sendReceive
-    result(pipeline(Post(s"$url/terminate", s"frameworkId=$frameworkId")), waitTime)
+    result(request(Post(s"$url/terminate", s"frameworkId=$frameworkId")), waitTime).value
+  }
+
+  def teardown(frameworkId: String): Future[HttpResponse] = {
+    request(Post(s"$url/teardown", s"frameworkId=$frameworkId")).map(_.value)
   }
 }

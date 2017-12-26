@@ -1,45 +1,41 @@
 package mesosphere.marathon
 package core.election
 
-import akka.actor.ActorSystem
+import akka.actor.{ ActorSystem, Cancellable }
 import akka.event.EventStream
-import com.codahale.metrics.MetricRegistry
-import mesosphere.marathon.core.base.ShutdownHooks
-import mesosphere.marathon.core.election.impl.{ CuratorElectionService, ExponentialBackoff, PseudoElectionService }
-import mesosphere.marathon.metrics.Metrics
+import akka.stream.scaladsl.Source
+import mesosphere.marathon.core.base.CrashStrategy
+import mesosphere.marathon.util.LifeCycledCloseable
+import scala.concurrent.ExecutionContext
+import scala.concurrent.duration._
 
 class ElectionModule(
     config: MarathonConf,
     system: ActorSystem,
     eventStream: EventStream,
-    metrics: Metrics = new Metrics(new MetricRegistry),
     hostPort: String,
-    shutdownHooks: ShutdownHooks) {
+    crashStrategy: CrashStrategy,
+    electionEC: ExecutionContext
+) {
 
-  private lazy val backoff = new ExponentialBackoff(name = "offerLeadership")
-  lazy val service: ElectionService = if (config.highlyAvailable()) {
+  lazy private val electionBackend: Source[LeadershipState, Cancellable] = if (config.highlyAvailable()) {
     config.leaderElectionBackend.get match {
       case Some("curator") =>
-        new CuratorElectionService(
-          config,
-          system,
-          eventStream,
-          metrics,
+        val client = new LifeCycledCloseable(CuratorElectionStream.newCuratorConnection(config))
+        sys.addShutdownHook { client.close() }
+        CuratorElectionStream(
+          client,
+          config.zooKeeperLeaderPath,
+          config.zooKeeperConnectionTimeout().millis,
           hostPort,
-          backoff,
-          shutdownHooks
-        )
+          electionEC)
       case backend: Option[String] =>
         throw new IllegalArgumentException(s"Leader election backend $backend not known!")
     }
   } else {
-    new PseudoElectionService(
-      system,
-      eventStream,
-      metrics,
-      hostPort,
-      backoff,
-      shutdownHooks
-    )
+    PsuedoElectionStream()
   }
+
+  lazy val service: ElectionService = new ElectionServiceImpl(eventStream, hostPort, electionBackend,
+    crashStrategy, electionEC)(system)
 }

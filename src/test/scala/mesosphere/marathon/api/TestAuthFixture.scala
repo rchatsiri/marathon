@@ -1,4 +1,5 @@
-package mesosphere.marathon.api
+package mesosphere.marathon
+package api
 
 import java.util.Collections
 import javax.servlet.http.{ HttpServletRequest, HttpServletResponse }
@@ -15,8 +16,8 @@ class TestAuthFixture() extends Mockito {
 
   var identity: Identity = new Identity {}
 
-  var authenticated: Boolean = true
-  var authorized: Boolean = true
+  @volatile var authenticated: Boolean = true
+  @volatile var authorized: Boolean = true
   var authFn: Any => Boolean = { _ => true }
 
   val UnauthorizedStatus = 401

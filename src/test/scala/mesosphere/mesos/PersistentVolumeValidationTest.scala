@@ -1,16 +1,13 @@
 package mesosphere.mesos
 
-import com.wix.accord._
-import mesosphere.UnitTest
-import mesosphere.marathon.state.{ PersistentVolume, PersistentVolumeInfo, Volume }
-import org.apache.mesos
+import mesosphere.{ UnitTest, ValidationTestLike }
+import mesosphere.marathon.state._
 
-class PersistentVolumeValidationTest extends UnitTest {
+class PersistentVolumeValidationTest extends UnitTest with ValidationTestLike {
   "PersistentVolumeValidation" should {
     "create a PersistentVolume with no validation violations" in {
       Given("a PersistentVolume with no validation violations")
-      val path = "path"
-      val volume = PersistentVolume(path, PersistentVolumeInfo(1), mesos.Protos.Volume.Mode.RW)
+      val volume = PersistentVolume(None, PersistentVolumeInfo(1))
 
       When("The volume is created and validation succeeded")
       volume should not be null
@@ -22,22 +19,16 @@ class PersistentVolumeValidationTest extends UnitTest {
 
     "create a PersistentVolume with validation violation in containerPath" in {
       Given("a PersistentVolume with validation violation in containerPath")
-      val path = "/path"
-      val volume = PersistentVolume(path, PersistentVolumeInfo(1), mesos.Protos.Volume.Mode.RW)
+      val persistentVolume = PersistentVolume(None, PersistentVolumeInfo(1))
+      val mount = VolumeMount(None, "/path")
+      val volume = VolumeWithMount(persistentVolume, mount)
 
       When("The volume is created and validation failed")
       volume should not be null
-      volume.containerPath should be (path)
-      val validation = Volume.validVolume(Set())(volume)
-      validation.isSuccess should be (false)
 
       Then("A validation exists with a readable error message")
-      validation match {
-        case Failure(violations) =>
-          violations should contain (RuleViolation("/path", "value must not contain \"/\"", Some("containerPath")))
-        case Success =>
-          fail("validation should fail!")
-      }
+      VolumeWithMount.validVolumeWithMount(Set())(volume) should haveViolations(
+        "/mount/mountPath" -> "value must not contain \"/\"")
     }
   }
 }

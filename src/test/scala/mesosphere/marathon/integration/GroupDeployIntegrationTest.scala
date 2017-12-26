@@ -1,64 +1,77 @@
 package mesosphere.marathon
 package integration
 
+import java.util.concurrent.atomic.AtomicInteger
+
 import mesosphere.AkkaIntegrationTest
-import mesosphere.marathon.api.v2.json.GroupUpdate
-import mesosphere.marathon.integration.setup.{ EmbeddedMarathonTest, IntegrationHealthCheck, WaitTestSupport }
-import mesosphere.marathon.state.{ AppDefinition, PathId, UpgradeStrategy }
-import org.apache.http.HttpStatus
-import spray.http.DateTime
+import mesosphere.marathon.integration.setup.{ EmbeddedMarathonTest, IntegrationHealthCheck }
+import mesosphere.marathon.raml.{ App, GroupUpdate, UpgradeStrategy }
+import mesosphere.marathon.state.{ Group, PathId }
 
 import scala.concurrent.duration._
 
-@UnstableTest
 @IntegrationTest
 class GroupDeployIntegrationTest extends AkkaIntegrationTest with EmbeddedMarathonTest {
 
-  //clean up state before running the test case
-  before(cleanUp())
+  import PathId._
+
+  val appIdCount = new AtomicInteger()
+  val groupIdCount = new AtomicInteger()
+
+  def nextAppId(suffix: Option[String] = None): String = s"app-${suffix.getOrElse(appIdCount.getAndIncrement())}"
+  def nextGroupId(suffix: Option[String] = None): PathId = s"group-${suffix.getOrElse(groupIdCount.getAndIncrement())}".toRootTestPath
+
+  def temporaryGroup(testCode: (PathId) => Any): Unit = {
+    val gid = nextGroupId()
+    try {
+      testCode(gid)
+    } finally {
+      marathon.deleteGroup(gid, force = true)
+    }
+  }
 
   "GroupDeployment" should {
     "create empty group successfully" in {
       Given("A group which does not exist in marathon")
-      val group = GroupUpdate.empty("test".toRootTestPath)
+      val group = Group.emptyUpdate(nextGroupId(Some("which-does-not-exist-created-successfully")))
 
       When("The group gets created")
       val result = marathon.createGroup(group)
 
       Then("The group is created. A success event for this group is send.")
-      result.code should be(201) //created
-      val event = waitForDeployment(result)
+      result should be(Created)
+      waitForDeployment(result)
     }
 
     "update empty group successfully" in {
       Given("An existing group")
       val name = "test2".toRootTestPath
-      val group = GroupUpdate.empty(name)
-      val dependencies = Set("/test".toTestPath)
+      val group = Group.emptyUpdate(name)
       waitForDeployment(marathon.createGroup(group))
 
       When("The group gets updated")
+      val dependencies = Set("/test".toTestPath.toString)
       waitForDeployment(marathon.updateGroup(name, group.copy(dependencies = Some(dependencies))))
 
       Then("The group is updated")
       val result = marathon.group("test2".toRootTestPath)
-      result.code should be(200)
+      result should be(OK)
       result.value.dependencies should be(dependencies)
     }
 
     "deleting an existing group gives a 200 http response" in {
       Given("An existing group")
-      val group = GroupUpdate.empty("test3".toRootTestPath)
+      val group = Group.emptyUpdate(nextGroupId(Some("which-exists-give-200-when-deleted")))
       waitForDeployment(marathon.createGroup(group))
 
       When("The group gets deleted")
-      val result = marathon.deleteGroup(group.id.get)
+      val result = marathon.deleteGroup(PathId(group.id.get))
       waitForDeployment(result)
 
       Then("The group is deleted")
-      result.code should be(200)
+      result should be(OK)
       // only expect the test base group itself
-      marathon.listGroupsInBaseGroup.value.filter { group => group.id != testBasePath } should be('empty)
+      marathon.listGroupsInBaseGroup.value.map(_.id) should not contain (group.id)
     }
 
     "delete a non existing group should give a 404 http response" in {
@@ -66,49 +79,54 @@ class GroupDeployIntegrationTest extends AkkaIntegrationTest with EmbeddedMarath
       val result = marathon.deleteGroup("does_not_exist".toRootTestPath)
 
       Then("We get a 404 http response code")
-      result.code should be(404)
+      result should be(NotFound)
     }
 
     "create a group with applications to start" in {
-      Given("A group with one application")
-      val app = appProxy("/test/app".toRootTestPath, "v1", 2, healthCheck = None)
-      val group = GroupUpdate("/test".toRootTestPath, Set(app))
+      val id = "group-with-appication-to-start".toRootTestPath
+      val appId = id / nextAppId()
+
+      Given(s"A group with one application with id $appId")
+      val app = appProxy(appId, "v1", 2, healthCheck = None)
+      val group = GroupUpdate(Some(id.toString), apps = Some(Set(app)))
 
       When("The group is created")
       waitForDeployment(marathon.createGroup(group))
 
       Then("A success event is send and the application has been started")
-      val tasks = waitForTasks(app.id, app.instances)
+      val tasks = waitForTasks(PathId(app.id), app.instances)
       tasks should have size 2
     }
 
     "update a group with applications to restart" in {
-      Given("A group with one application started")
-      val id = "test".toRootTestPath
-      val appId = id / "app"
+      val id = nextGroupId(Some("with-application-to-restart"))
+      val appId = id / nextAppId()
+
+      Given(s"A group with one application started with id $appId")
       val app1V1 = appProxy(appId, "v1", 2, healthCheck = None)
-      waitForDeployment(marathon.createGroup(GroupUpdate(id, Set(app1V1))))
-      waitForTasks(app1V1.id, app1V1.instances)
+      waitForDeployment(marathon.createGroup(GroupUpdate(Some(id.toString), Some(Set(app1V1)))))
+      waitForTasks(PathId(app1V1.id), app1V1.instances)
 
       When("The group is updated, with a changed application")
       val app1V2 = appProxy(appId, "v2", 2, healthCheck = None)
-      waitForDeployment(marathon.updateGroup(id, GroupUpdate(id, Set(app1V2))))
+      waitForDeployment(marathon.updateGroup(id, GroupUpdate(Some(id.toString), Some(Set(app1V2)))))
 
       Then("A success event is send and the application has been started")
-      waitForTasks(app1V2.id, app1V2.instances)
+      waitForTasks(PathId(app1V2.id), app1V2.instances)
     }
 
     "update a group with the same application so no restart is triggered" in {
-      Given("A group with one application started")
-      val id = "test".toRootTestPath
-      val appId = id / "app"
+      val id = nextGroupId(Some("with-the-same-application-no-restart-triggered"))
+      val appId = id / nextAppId()
+
+      Given(s"A group with one application started with id $appId")
       val app1V1 = appProxy(appId, "v1", 2, healthCheck = None)
-      waitForDeployment(marathon.createGroup(GroupUpdate(id, Set(app1V1))))
-      waitForTasks(app1V1.id, app1V1.instances)
+      waitForDeployment(marathon.createGroup(GroupUpdate(Some(id.toString), Some(Set(app1V1)))))
+      waitForTasks(PathId(app1V1.id), app1V1.instances)
       val tasks = marathon.tasks(appId)
 
       When("The group is updated, with the same application")
-      waitForDeployment(marathon.updateGroup(id, GroupUpdate(id, Set(app1V1))))
+      waitForDeployment(marathon.updateGroup(id, GroupUpdate(Some(id.toString), Some(Set(app1V1)))))
 
       Then("There is no deployment and all tasks still live")
       marathon.listDeploymentsForBaseGroup().value should be ('empty)
@@ -116,11 +134,12 @@ class GroupDeployIntegrationTest extends AkkaIntegrationTest with EmbeddedMarath
     }
 
     "create a group with application with health checks" in {
-      Given("A group with one application")
-      val id = "proxy".toRootTestPath
-      val appId = id / "app"
+      val id = nextGroupId(Some("create-with-application-with-health-checks"))
+      val appId = id / nextAppId()
+
+      Given(s"A group with one application with id $appId")
       val proxy = appProxy(appId, "v1", 1)
-      val group = GroupUpdate(id, Set(proxy))
+      val group = GroupUpdate(Some(id.toString), Some(Set(proxy)))
 
       When("The group is created")
       val create = marathon.createGroup(group)
@@ -130,13 +149,14 @@ class GroupDeployIntegrationTest extends AkkaIntegrationTest with EmbeddedMarath
     }
 
     "upgrade a group with application with health checks" in {
-      Given("A group with one application")
-      val id = "test".toRootTestPath
-      val appId = id / "app"
+      val id = nextGroupId(Some("update-with-application-with-health-checks"))
+      val appId = id / nextAppId()
+
+      Given(s"A group with one application with id $appId")
       val proxy = appProxy(appId, "v1", 1)
-      val group = GroupUpdate(id, Set(proxy))
+      val group = GroupUpdate(Some(id.toString), Some(Set(proxy)))
       waitForDeployment(marathon.createGroup(group))
-      val check = appProxyCheck(proxy.id, "v1", state = true)
+      val check = registerAppProxyHealthCheck(PathId(proxy.id), "v1", state = true)
 
       When("The group is updated")
       check.afterDelay(1.second, state = false)
@@ -148,251 +168,192 @@ class GroupDeployIntegrationTest extends AkkaIntegrationTest with EmbeddedMarath
     }
 
     "rollback from an upgrade of group" in {
-      Given("A group with one application")
-      val gid = "proxy".toRootTestPath
-      val appId = gid / "app"
+      val gid = nextGroupId(Some("with-rollback-from-an-upgrade-of-group"))
+      val appId = gid / nextAppId()
+
+      Given(s"A group with one application with id $appId")
       val proxy = appProxy(appId, "v1", 2)
-      val group = GroupUpdate(gid, Set(proxy))
+      val group = GroupUpdate(Some(gid.toString), Some(Set(proxy)))
       val create = marathon.createGroup(group)
       waitForDeployment(create)
-      waitForTasks(proxy.id, proxy.instances)
-      val v1Checks = appProxyCheck(appId, "v1", state = true)
+      waitForTasks(PathId(proxy.id), proxy.instances)
+      val v1Checks = registerAppProxyHealthCheck(appId, "v1", state = true)
 
       When("The group is updated")
       waitForDeployment(marathon.updateGroup(gid, group.copy(apps = Some(Set(appProxy(appId, "v2", 2))))))
 
       Then("The new version is deployed")
-      val v2Checks = appProxyCheck(appId, "v2", state = true)
-      WaitTestSupport.validFor("all v2 apps are available", 10.seconds) { v2Checks.pingSince(2.seconds) }
+      val v2Checks = registerAppProxyHealthCheck(appId, "v2", state = true)
+      eventually {
+        v2Checks.pinged.get should be(true) withClue "v2 apps did not come up"
+      }
 
       When("A rollback to the first version is initiated")
-      waitForDeployment(marathon.rollbackGroup(gid, create.value.version), 120.seconds)
+      v1Checks.pinged.set(false)
+      waitForDeployment(marathon.rollbackGroup(gid, create.value.version))
 
       Then("The rollback will be performed and the old version is available")
-      v1Checks.healthy
-      WaitTestSupport.validFor("all v1 apps are available", 10.seconds) { v1Checks.pingSince(2.seconds) }
+      eventually {
+        v1Checks.pinged.get should be(true) withClue "v1 apps did not come up again"
+      }
     }
 
     "during Deployment the defined minimum health capacity is never undershot" in {
-      Given("A group with one application")
-      val id = "test".toRootTestPath
-      val appId = id / "app"
-      val proxy = appProxy(appId, "v1", 2).copy(upgradeStrategy = UpgradeStrategy(1))
-      val group = GroupUpdate(id, Set(proxy))
+      val id = nextGroupId(Some("that-during-deployment-min-health-capacity-never-undershot"))
+      val appId = id / nextAppId()
+
+      Given(s"A group with one application with id $appId")
+      val proxy = appProxy(appId, "v1", 2).copy(upgradeStrategy = Some(UpgradeStrategy(1, 1)))
+      val group = GroupUpdate(Some(id.toString), Some(Set(proxy)))
       val create = marathon.createGroup(group)
       waitForDeployment(create)
       waitForTasks(appId, proxy.instances)
-      val v1Check = appProxyCheck(appId, "v1", state = true)
+      val v1Check = registerAppProxyHealthCheck(appId, "v1", state = true)
 
       When("The new application is not healthy")
-      val v2Check = appProxyCheck(appId, "v2", state = false) //will always fail
+      val v2Check = registerAppProxyHealthCheck(appId, "v2", state = false) //will always fail
       val update = marathon.updateGroup(id, group.copy(apps = Some(Set(appProxy(appId, "v2", 2)))))
 
       Then("All v1 applications are kept alive")
-      v1Check.healthy
-      WaitTestSupport.validFor("all v1 apps are always available", 15.seconds) { v1Check.pingSince(3.seconds) }
+      v1Check.pinged.set(false)
+      eventually {
+        v1Check.pinged.get should be(true) withClue "v1 are not alive"
+      }
 
       When("The new application becomes healthy")
       v2Check.state = true //make v2 healthy, so the app can be cleaned
       waitForDeployment(update)
     }
 
-    "An upgrade in progress can not be interrupted without force" in {
-      Given("A group with one application with an upgrade in progress")
-      val id = "forcetest".toRootTestPath
-      val appId = id / "app"
+    "An upgrade in progress cannot be interrupted without force" in temporaryGroup { gid =>
+      val appId = gid / nextAppId(Some("with-upgrade-in-progress-cannot-be-interrupted-without-force"))
+
+      Given(s"A group with one application with id $appId with an upgrade in progress")
       val proxy = appProxy(appId, "v1", 2)
-      val group = GroupUpdate(id, Set(proxy))
+      val group = GroupUpdate(Some(gid.toString), Some(Set(proxy)))
       val create = marathon.createGroup(group)
       waitForDeployment(create)
-      appProxyCheck(appId, "v2", state = false) //will always fail
-      marathon.updateGroup(id, group.copy(apps = Some(Set(appProxy(appId, "v2", 2)))))
+      registerAppProxyHealthCheck(appId, "v2", state = false) //will always fail
+      marathon.updateGroup(gid, group.copy(apps = Some(Set(appProxy(appId, "v2", 2)))))
 
       When("Another upgrade is triggered, while the old one is not completed")
-      val result = marathon.updateGroup(id, group.copy(apps = Some(Set(appProxy(appId, "v3", 2)))))
+      val result = marathon.updateGroup(gid, group.copy(apps = Some(Set(appProxy(appId, "v3", 2)))))
 
       Then("An error is indicated")
-      result.code should be (HttpStatus.SC_CONFLICT)
+      result should be (Conflict)
       waitForEvent("group_change_failed")
 
       When("Another upgrade is triggered with force, while the old one is not completed")
-      val force = marathon.updateGroup(id, group.copy(apps = Some(Set(appProxy(appId, "v4", 2)))), force = true)
+      val force = marathon.updateGroup(gid, group.copy(apps = Some(Set(appProxy(appId, "v4", 2)))), force = true)
 
       Then("The update is performed")
       waitForDeployment(force)
     }
 
-    "A group with a running deployment can not be deleted without force" in {
-      Given("A group with one application with an upgrade in progress")
-      val id = "forcetest".toRootTestPath
-      val appId = id / "app"
+    "A group with a running deployment can not be deleted without force" in temporaryGroup{ gid =>
+      val appId = gid / nextAppId(Some("with-running-deployment-cannot-be-deleted-without-force"))
+
+      Given(s"A group with one application with id $appId with an upgrade in progress")
       val proxy = appProxy(appId, "v1", 2)
-      appProxyCheck(appId, "v1", state = false) //will always fail
-      val group = GroupUpdate(id, Set(proxy))
-      val create = marathon.createGroup(group)
+      registerAppProxyHealthCheck(appId, "v1", state = false) //will always fail
+      val group = GroupUpdate(Some(gid.toString), Some(Set(proxy)))
+      marathon.createGroup(group)
+      // There is race condition in mesos which we trigger by issuing Launch and Kill requests very fast after each other
+      // https://issues.apache.org/jira/browse/MESOS-7783
+      // To prevent it, we should wait until both tasks are RUNNING
+      waitForTasks(appId, 2)
 
       When("Delete the group, while the deployment is in progress")
-      val deleteResult = marathon.deleteGroup(id)
+      val deleteResult = marathon.deleteGroup(gid)
 
       Then("An error is indicated")
-      deleteResult.code should be (HttpStatus.SC_CONFLICT)
+      deleteResult should be(Conflict)
       waitForEvent("group_change_failed")
 
       When("Delete is triggered with force, while the deployment is not completed")
-      val force = marathon.deleteGroup(id, force = true)
+      val force = marathon.deleteGroup(gid, force = true)
+      force.success should be(true) withClue (s"Could not force delete $gid: Response: code=${force.code} body=${force.entityString}")
 
       Then("The delete is performed")
       waitForDeployment(force)
     }
 
     "Groups with Applications with circular dependencies can not get deployed" in {
-      Given("A group with 3 circular dependent applications")
-      val db = appProxy("/test/db".toTestPath, "v1", 1, dependencies = Set("/test/frontend1".toTestPath))
-      val service = appProxy("/test/service".toTestPath, "v1", 1, dependencies = Set(db.id))
-      val frontend = appProxy("/test/frontend1".toTestPath, "v1", 1, dependencies = Set(service.id))
-      val group = GroupUpdate("test".toTestPath, Set(db, service, frontend))
+      val gid = nextGroupId(Some("with-application-with-circular-dependencies-cannot-be-deployed"))
+
+      Given(s"A group with id $gid with 3 circular dependent applications")
+      val db = appProxy(gid / "db", "v1", 1, dependencies = Set(gid / "frontend1"))
+      val service = appProxy(gid / "service", "v1", 1, dependencies = Set(db.id.toPath))
+      val frontend = appProxy(gid / "frontend1", "v1", 1, dependencies = Set(service.id.toPath))
+      val group = GroupUpdate(Option(gid.toString), Option(Set(db, service, frontend)))
 
       When("The group gets posted")
       val result = marathon.createGroup(group)
 
       Then("An unsuccessful response has been posted, with an error indicating cyclic dependencies")
+      result.success should be(false) withClue s"Response code is ${result.code}: ${result.entityString}"
+
       val errors = (result.entityJson \ "details" \\ "errors").flatMap(_.as[Seq[String]])
-      errors.find(_.contains("cyclic dependencies")) shouldBe defined
+      errors.find(_.contains("cyclic dependencies")) shouldBe defined withClue s"""errors "$errors" did not contain "cyclic dependencies" error."""
     }
 
-    "Applications with dependencies get deployed in the correct order" in {
-      Given("A group with 3 dependent applications")
-      val db = appProxy("/test/db".toTestPath, "v1", 1)
-      val service = appProxy("/test/service".toTestPath, "v1", 1, dependencies = Set(db.id))
-      val frontend = appProxy("/test/frontend1".toTestPath, "v1", 1, dependencies = Set(service.id))
-      val group = GroupUpdate("/test".toTestPath, Set(db, service, frontend))
+    "Applications with dependencies get deployed in the correct order" in temporaryGroup { gid =>
+
+      Given(s"A group with id $gid with 3 dependent applications")
+      val db = appProxy(gid / "db", "v1", 1)
+      val service = appProxy(gid / "service", "v1", 1, dependencies = Set(db.id.toPath))
+      val frontend = appProxy(gid / "frontend1", "v1", 1, dependencies = Set(service.id.toPath))
+      val group = GroupUpdate(Option(gid.toString), Option(Set(db, service, frontend)))
 
       When("The group gets deployed")
-      var ping = Map.empty[PathId, DateTime]
+      var ping = Map.empty[String, Long]
       def storeFirst(health: IntegrationHealthCheck): Unit = {
-        if (!ping.contains(health.appId)) ping += health.appId -> DateTime.now
+        if (!ping.contains(health.appId.toString)) ping += health.appId.toString -> System.currentTimeMillis()
       }
-      val dbHealth = appProxyCheck(db.id, "v1", state = true).withHealthAction(storeFirst)
-      val serviceHealth = appProxyCheck(service.id, "v1", state = true).withHealthAction(storeFirst)
-      val frontendHealth = appProxyCheck(frontend.id, "v1", state = true).withHealthAction(storeFirst)
-      waitForDeployment(marathon.createGroup(group))
+      registerAppProxyHealthCheck(PathId(db.id), "v1", state = true).withHealthAction(storeFirst)
+      registerAppProxyHealthCheck(PathId(service.id), "v1", state = true).withHealthAction(storeFirst)
+      registerAppProxyHealthCheck(PathId(frontend.id), "v1", state = true).withHealthAction(storeFirst)
+
+      val response = marathon.createGroup(group)
+      response.success should be(true) withClue (s"Could create group $gid: Response: code=${response.code} body=${response.entityString}")
+      waitForDeployment(response)
 
       Then("The correct order is maintained")
       ping should have size 3
-      ping(db.id) should be < ping(service.id)
-      ping(service.id) should be < ping(frontend.id)
+      ping(db.id) should be < ping(service.id) withClue s"database was deployed at ${ping(db.id)} and service at ${ping(service.id)}"
+      ping(service.id) should be < ping(frontend.id) withClue s"service was deployed at ${ping(service.id)} and frontend at ${ping(frontend.id)}"
     }
 
-    "Groups with dependencies get deployed in the correct order" in {
-      Given("A group with 3 dependent applications")
-      val db = appProxy("/test/db/db1".toTestPath, "v1", 1)
-      val service = appProxy("/test/service/service1".toTestPath, "v1", 1)
-      val frontend = appProxy("/test/frontend/frontend1".toTestPath, "v1", 1)
+    "Groups with dependencies get deployed in the correct order" in temporaryGroup { gid =>
+
+      Given(s"A group with id $gid with 3 dependent applications")
+      val db = appProxy(gid / "db/db1", "v1", 1)
+      val service = appProxy(gid / "service/service1", "v1", 1)
+      val frontend = appProxy(gid / "frontend/frontend1", "v1", 1)
       val group = GroupUpdate(
-        "/test".toTestPath,
-        Set.empty[AppDefinition],
-        Set(
-          GroupUpdate(PathId("db"), apps = Set(db)),
-          GroupUpdate(PathId("service"), apps = Set(service)).copy(dependencies = Some(Set("/test/db".toTestPath))),
-          GroupUpdate(PathId("frontend"), apps = Set(frontend)).copy(dependencies = Some(Set("/test/service".toTestPath)))
-        )
+        Option(gid.toString),
+        Option(Set.empty[App]),
+        Option(Set(
+          GroupUpdate(Some("db"), apps = Some(Set(db))),
+          GroupUpdate(Some("service"), apps = Some(Set(service))).copy(dependencies = Some(Set((gid / "db").toString))),
+          GroupUpdate(Some("frontend"), apps = Some(Set(frontend))).copy(dependencies = Some(Set((gid / "service").toString)))
+        ))
       )
 
       When("The group gets deployed")
-      var ping = Map.empty[PathId, DateTime]
+      var ping = Map.empty[String, Long]
       def storeFirst(health: IntegrationHealthCheck): Unit = {
-        if (!ping.contains(health.appId)) ping += health.appId -> DateTime.now
+        if (!ping.contains(health.appId.toString)) ping += health.appId.toString -> System.currentTimeMillis()
       }
-      val dbHealth = appProxyCheck(db.id, "v1", state = true).withHealthAction(storeFirst)
-      val serviceHealth = appProxyCheck(service.id, "v1", state = true).withHealthAction(storeFirst)
-      val frontendHealth = appProxyCheck(frontend.id, "v1", state = true).withHealthAction(storeFirst)
+      registerAppProxyHealthCheck(PathId(db.id), "v1", state = true).withHealthAction(storeFirst)
+      registerAppProxyHealthCheck(PathId(service.id), "v1", state = true).withHealthAction(storeFirst)
+      registerAppProxyHealthCheck(PathId(frontend.id), "v1", state = true).withHealthAction(storeFirst)
       waitForDeployment(marathon.createGroup(group))
 
       Then("The correct order is maintained")
       ping should have size 3
-      ping(db.id) should be < ping(service.id)
-      ping(service.id) should be < ping(frontend.id)
-    }
-
-    "Groups with dependent applications get upgraded in the correct order with maintained upgrade strategy" in {
-      var ping = Map.empty[String, DateTime]
-      def key(health: IntegrationHealthCheck) = s"${health.appId}_${health.versionId}"
-      def storeFirst(health: IntegrationHealthCheck): Unit = {
-        if (!ping.contains(key(health))) ping += key(health) -> DateTime.now
-      }
-      def create(version: String, initialState: Boolean) = {
-        val tolerateFiveMinutesOfFailures = appProxyHealthCheck(maxConsecutiveFailures = 300)
-        val db = appProxy("/test/db".toTestPath, version, 1, healthCheck = Some(tolerateFiveMinutesOfFailures))
-        val service = appProxy("/test/service".toTestPath, version, 1, dependencies = Set(db.id), healthCheck = Some(tolerateFiveMinutesOfFailures))
-        val frontend = appProxy("/test/frontend1".toTestPath, version, 1, dependencies = Set(service.id), healthCheck = Some(tolerateFiveMinutesOfFailures))
-        (
-          GroupUpdate("/test".toTestPath, Set(db, service, frontend)),
-          appProxyCheck(db.id, version, state = initialState).withHealthAction(storeFirst),
-          appProxyCheck(service.id, version, state = initialState).withHealthAction(storeFirst),
-          appProxyCheck(frontend.id, version, state = initialState).withHealthAction(storeFirst))
-      }
-
-      Given("A group with 3 dependent applications")
-      val (groupV1, dbV1, serviceV1, frontendV1) = create("v1", true)
-      waitForDeployment(marathon.createGroup(groupV1))
-
-      When("The group gets updated, where frontend2 is not healthy")
-      val (groupV2, dbV2, serviceV2, frontendV2) = create("v2", false)
-
-      val upgrade = marathon.updateGroup(groupV2.id.get, groupV2)
-      waitForHealthCheck(dbV2)
-
-      Then("The correct order is maintained")
-      ping should have size 4
-      ping(key(dbV1)) should be < ping(key(serviceV1))
-      ping(key(serviceV1)) should be < ping(key(frontendV1))
-      WaitTestSupport.validFor("all v1 apps are available as well as db v2", 30.seconds) {
-        dbV1.pingSince(2.seconds) &&
-          serviceV1.pingSince(2.seconds) &&
-          frontendV1.pingSince(2.seconds) &&
-          dbV2.pingSince(2.seconds)
-      }
-
-      When("The v2 db becomes healthy")
-      dbV2.state = true
-
-      waitForHealthCheck(serviceV2)
-      Then("The correct order is maintained")
-      ping should have size 5
-      ping(key(serviceV1)) should be < ping(key(frontendV1))
-      ping(key(dbV2)) should be < ping(key(serviceV2))
-      WaitTestSupport.validFor("service and frontend v1 are available as well as db and service v2", 30.seconds) {
-        serviceV1.pingSince(2.seconds) &&
-          frontendV1.pingSince(2.seconds) &&
-          dbV2.pingSince(2.seconds) &&
-          serviceV2.pingSince(2.seconds)
-      }
-
-      When("The v2 service becomes healthy")
-      serviceV2.state = true
-
-      waitForHealthCheck(frontendV2)
-      Then("The correct order is maintained")
-      ping should have size 6
-      ping(key(dbV2)) should be < ping(key(serviceV2))
-      ping(key(serviceV2)) should be < ping(key(frontendV2))
-      WaitTestSupport.validFor("frontend v1 is available as well as all v2", 15.seconds) {
-        frontendV1.pingSince(2.seconds) &&
-          dbV2.pingSince(2.seconds) &&
-          serviceV2.pingSince(2.seconds) &&
-          frontendV2.pingSince(2.seconds)
-      }
-
-      When("The v2 frontend becomes healthy")
-      frontendV2.state = true
-
-      Then("The deployment can be finished. All v1 apps are destroyed and all v2 apps are healthy.")
-      waitForDeployment(upgrade)
-      List(dbV1, serviceV1, frontendV1).foreach(_.pinged = false)
-      WaitTestSupport.validFor("all v2 apps are alive", 15.seconds) {
-        !dbV1.pinged && !serviceV1.pinged && !frontendV1.pinged &&
-          dbV2.pingSince(2.seconds) && serviceV2.pingSince(2.seconds) && frontendV2.pingSince(2.seconds)
-      }
+      ping(db.id) should be < ping(service.id) withClue s"database was deployed at ${ping(db.id)} and service at ${ping(service.id)}"
+      ping(service.id) should be < ping(frontend.id) withClue s"service was deployed at ${ping(service.id)} and frontend at ${ping(frontend.id)}"
     }
   }
 }

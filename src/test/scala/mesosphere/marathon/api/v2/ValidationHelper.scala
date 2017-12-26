@@ -1,18 +1,26 @@
-package mesosphere.marathon.api.v2
+package mesosphere.marathon
+package api.v2
 
 import com.wix.accord._
+import mesosphere.marathon.api.v2.Validation.ConstraintViolation
+import play.api.libs.json.{ JsError, JsResult }
 
 object ValidationHelper {
-  case class ViolationMessageAndPath(message: String, path: Option[String]) {
-    override def toString: String = path.map(p => s"Path: $p. Error message: $message")
-      .getOrElse(s"Error message: $message")
-  }
 
-  def getAllRuleConstrains(r: Result): Set[ViolationMessageAndPath] = {
+  def getAllRuleConstraints(r: Result): Set[ConstraintViolation] = Validation.allViolations(r).toSet
+
+  def getAllRuleConstraints(r: JsResult[_]): Set[ConstraintViolation] = {
     r match {
-      case f: Failure => f.violations.flatMap(Validation.allRuleViolationsWithFullDescription(_))
-        .map(r => ViolationMessageAndPath(r.constraint, r.description))
-      case _ => Set.empty[ViolationMessageAndPath]
+      case f: JsError => f.errors.flatMap {
+        case (path, errors) =>
+          errors.flatMap { err =>
+            val messages = err.messages
+            messages.map { msg =>
+              ConstraintViolation(path.toString, msg)
+            }
+          }
+      }(collection.breakOut)
+      case _ => Set.empty
     }
   }
 }

@@ -6,13 +6,11 @@ import java.util.UUID
 
 import akka.Done
 import akka.stream.scaladsl.Sink
-import com.codahale.metrics.MetricRegistry
 import mesosphere.AkkaUnitTest
 import mesosphere.marathon.core.storage.store.impl.cache.{ LazyCachingPersistenceStore, LoadTimeCachingPersistenceStore }
 import mesosphere.marathon.core.storage.store.impl.memory.InMemoryPersistenceStore
 import mesosphere.marathon.core.storage.store.impl.zk.ZkPersistenceStore
 import mesosphere.marathon.integration.setup.ZookeeperServerTest
-import mesosphere.marathon.metrics.Metrics
 import mesosphere.marathon.state.{ AppDefinition, PathId, Timestamp }
 import mesosphere.marathon.test.Mockito
 
@@ -28,7 +26,7 @@ class GroupRepositoryTest extends AkkaUnitTest with Mockito with ZookeeperServer
       "return an empty root if no root exists" in {
         val repo = createRepo(mock[AppRepository], mock[PodRepository], 1)
         val root = repo.root().futureValue
-        root.transitiveAppsById should be('empty)
+        root.transitiveApps should be('empty)
         root.dependencies should be('empty)
         root.groupsById should be('empty)
       }
@@ -122,8 +120,10 @@ class GroupRepositoryTest extends AkkaUnitTest with Mockito with ZookeeperServer
         noMoreInteractions(appRepo)
       }
       "retrieve a historical version" in {
-        implicit val metrics = new Metrics(new MetricRegistry)
-        val appRepo = AppRepository.inMemRepository(new InMemoryPersistenceStore())
+        val store = new InMemoryPersistenceStore()
+        store.markOpen()
+
+        val appRepo = AppRepository.inMemRepository(store)
         val repo = createRepo(appRepo, mock[PodRepository], 2)
 
         val app1 = AppDefinition("app1".toRootPath)
@@ -147,33 +147,32 @@ class GroupRepositoryTest extends AkkaUnitTest with Mockito with ZookeeperServer
   }
 
   def createInMemRepos(appRepository: AppRepository, podRepository: PodRepository, maxVersions: Int): GroupRepository = { // linter:ignore:UnusedParameter
-    implicit val metrics = new Metrics(new MetricRegistry)
     val store = new InMemoryPersistenceStore()
+    store.markOpen()
     GroupRepository.inMemRepository(store, appRepository, podRepository)
   }
 
   private def zkStore: ZkPersistenceStore = {
     val root = UUID.randomUUID().toString
     val rootClient = zkClient(namespace = Some(root))
-    implicit val metrics = new Metrics(new MetricRegistry)
     new ZkPersistenceStore(rootClient, Duration.Inf)
   }
 
   def createZkRepos(appRepository: AppRepository, podRepository: PodRepository, maxVersions: Int): GroupRepository = { // linter:ignore:UnusedParameter
-    implicit val metrics = new Metrics(new MetricRegistry)
     val store = zkStore
+    store.markOpen()
     GroupRepository.zkRepository(store, appRepository, podRepository)
   }
 
   def createLazyCachingRepos(appRepository: AppRepository, podRepository: PodRepository, maxVersions: Int): GroupRepository = { // linter:ignore:UnusedParameter
-    implicit val metrics = new Metrics(new MetricRegistry)
     val store = LazyCachingPersistenceStore(new InMemoryPersistenceStore())
+    store.markOpen()
     GroupRepository.inMemRepository(store, appRepository, podRepository)
   }
 
   def createLoadCachingRepos(appRepository: AppRepository, podRepository: PodRepository, maxVersions: Int): GroupRepository = { // linter:ignore:UnusedParameter
-    implicit val metrics = new Metrics(new MetricRegistry)
     val store = new LoadTimeCachingPersistenceStore(new InMemoryPersistenceStore())
+    store.markOpen()
     store.preDriverStarts.futureValue
     GroupRepository.inMemRepository(store, appRepository, podRepository)
   }

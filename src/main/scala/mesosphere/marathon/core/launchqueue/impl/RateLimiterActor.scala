@@ -1,16 +1,10 @@
-package mesosphere.marathon.core.launchqueue.impl
+package mesosphere.marathon
+package core.launchqueue.impl
 
-import akka.actor.{ Actor, ActorLogging, ActorRef, Cancellable, Props }
+import akka.actor.{ Actor, ActorRef, Cancellable, Props }
 import akka.event.LoggingReceive
-import mesosphere.marathon.core.launchqueue.impl.RateLimiterActor.{
-  AddDelay,
-  ResetViableTasksDelays,
-  DecreaseDelay,
-  DelayUpdate,
-  GetDelay,
-  ResetDelay,
-  ResetDelayResponse
-}
+import com.typesafe.scalalogging.StrictLogging
+import mesosphere.marathon.core.launchqueue.impl.RateLimiterActor._
 import mesosphere.marathon.state.{ RunSpec, Timestamp }
 
 import scala.concurrent.duration._
@@ -18,32 +12,33 @@ import scala.concurrent.duration._
 private[launchqueue] object RateLimiterActor {
   def props(
     rateLimiter: RateLimiter,
-    launchQueueRef: ActorRef): Props =
+    launchQueueActor: ActorRef): Props =
     Props(new RateLimiterActor(
-      rateLimiter, launchQueueRef
+      rateLimiter, launchQueueActor
     ))
 
   case class DelayUpdate(runSpec: RunSpec, delayUntil: Timestamp)
 
   case class ResetDelay(runSpec: RunSpec)
-  case object ResetDelayResponse
-
   case class GetDelay(runSpec: RunSpec)
   private[impl] case class AddDelay(runSpec: RunSpec)
   private[impl] case class DecreaseDelay(runSpec: RunSpec)
+  private[impl] case class AdvanceDelay(runSpec: RunSpec)
 
-  private case object ResetViableTasksDelays
+  private case object CleanupOverdueDelays
 }
 
 private class RateLimiterActor private (
     rateLimiter: RateLimiter,
-    launchQueueRef: ActorRef) extends Actor with ActorLogging {
+    launchQueueActor: ActorRef) extends Actor with StrictLogging {
   var cleanup: Cancellable = _
 
   override def preStart(): Unit = {
     import context.dispatcher
-    cleanup = context.system.scheduler.schedule(10.seconds, 10.seconds, self, ResetViableTasksDelays)
-    log.info("started RateLimiterActor")
+    val overdueDelayCleanupInterval = 10.seconds
+    cleanup = context.system.scheduler.schedule(
+      overdueDelayCleanupInterval, overdueDelayCleanupInterval, self, CleanupOverdueDelays)
+    logger.info("started RateLimiterActor")
   }
 
   override def postStop(): Unit = {
@@ -57,14 +52,12 @@ private class RateLimiterActor private (
     ).reduceLeft(_.orElse[Any, Unit](_))
   }
 
-  /**
-    * If an app gets removed or updated, the delay should be reset. If
-    * an app is considered viable, the delay should be reset too. We
-    * check and reset viable tasks' delays periodically.
-    */
   private[this] def receiveCleanup: Receive = {
-    case ResetViableTasksDelays =>
-      rateLimiter.resetDelaysOfViableTasks()
+    case CleanupOverdueDelays =>
+      // If a run spec gets removed or updated, the delay should be reset.
+      // In addition to that we remove overdue delays to ensure there are no leaks,
+      // by calling this periodically.
+      rateLimiter.cleanUpOverdueDelays()
   }
 
   private[this] def receiveDelayOps: Receive = {
@@ -73,13 +66,16 @@ private class RateLimiterActor private (
 
     case AddDelay(runSpec) =>
       rateLimiter.addDelay(runSpec)
-      launchQueueRef ! DelayUpdate(runSpec, rateLimiter.getDeadline(runSpec))
+      launchQueueActor ! DelayUpdate(runSpec, rateLimiter.getDeadline(runSpec))
 
-    case DecreaseDelay(runSpec) => // ignore for now
+    case DecreaseDelay(_) => // ignore for now
+
+    case AdvanceDelay(runSpec) =>
+      rateLimiter.advanceDelay(runSpec)
+      launchQueueActor ! DelayUpdate(runSpec, rateLimiter.getDeadline(runSpec))
 
     case ResetDelay(runSpec) =>
       rateLimiter.resetDelay(runSpec)
-      launchQueueRef ! DelayUpdate(runSpec, rateLimiter.getDeadline(runSpec))
-      sender() ! ResetDelayResponse
+      launchQueueActor ! DelayUpdate(runSpec, rateLimiter.getDeadline(runSpec))
   }
 }

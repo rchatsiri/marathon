@@ -1,16 +1,16 @@
 package mesosphere.marathon
 package test
 
+import java.time.Clock
+
 import akka.stream.Materializer
-import com.codahale.metrics.MetricRegistry
 import com.github.fge.jackson.JsonLoader
 import com.github.fge.jsonschema.core.report.ProcessingReport
 import com.github.fge.jsonschema.main.JsonSchemaFactory
 import mesosphere.marathon.Protos.Constraint
 import mesosphere.marathon.Protos.Constraint.Operator
 import mesosphere.marathon.api.JsonTestHelper
-import mesosphere.marathon.api.serialization.LabelsSerializer
-import mesosphere.marathon.core.base.Clock
+import mesosphere.marathon.core.async.ExecutionContexts
 import mesosphere.marathon.core.condition.Condition
 import mesosphere.marathon.core.instance.Instance
 import mesosphere.marathon.core.instance.Instance.InstanceState
@@ -18,30 +18,32 @@ import mesosphere.marathon.core.instance.update.InstanceChangeHandler
 import mesosphere.marathon.core.launcher.impl.{ ReservationLabels, TaskLabels }
 import mesosphere.marathon.core.leadership.LeadershipModule
 import mesosphere.marathon.core.storage.store.impl.memory.InMemoryPersistenceStore
+import mesosphere.marathon.core.pod.Network
 import mesosphere.marathon.core.task.Task
 import mesosphere.marathon.core.task.tracker.{ InstanceTracker, InstanceTrackerModule }
-import mesosphere.marathon.metrics.Metrics
-import mesosphere.marathon.raml.Resources
-import mesosphere.marathon.state.Container.{ Docker, PortMapping }
+import mesosphere.marathon.raml.{ Raml, Resources }
+import mesosphere.marathon.state.Container.Docker
+import mesosphere.marathon.state.Container.PortMapping
 import mesosphere.marathon.state.PathId._
 import mesosphere.marathon.state._
 import mesosphere.marathon.storage.repository.InstanceRepository
 import mesosphere.marathon.stream.Implicits._
 import mesosphere.mesos.protos.{ FrameworkID, OfferID, Range, RangesResource, Resource, ScalarResource, SlaveID }
+import mesosphere.mesos.protos.Implicits._
 import mesosphere.util.state.FrameworkId
+import org.apache.mesos.Protos.DomainInfo
+import org.apache.mesos.Protos.DomainInfo.FaultDomain
 import org.apache.mesos.Protos.Resource.{ DiskInfo, ReservationInfo }
 import org.apache.mesos.Protos._
 import org.apache.mesos.{ Protos => Mesos }
 import play.api.libs.json.Json
 
-import scala.concurrent.ExecutionContext
+import scala.concurrent.duration._
 import scala.util.Random
 
 object MarathonTestHelper {
 
-  import mesosphere.mesos.protos.Implicits._
-
-  lazy val clock = Clock()
+  lazy val clock = Clock.systemUTC()
 
   def makeConfig(args: String*): AllConf = {
     new AllConf(args.toIndexedSeq) {
@@ -52,7 +54,7 @@ object MarathonTestHelper {
   }
 
   def defaultConfig(
-    maxTasksPerOffer: Int = 1,
+    maxInstancesPerOffer: Int = 1,
     minReviveOffersInterval: Long = 100,
     mesosRole: Option[String] = None,
     acceptedResourceRoles: Option[Set[String]] = None,
@@ -62,7 +64,7 @@ object MarathonTestHelper {
 
     var args = Seq(
       "--master", "127.0.0.1:5050",
-      "--max_tasks_per_offer", maxTasksPerOffer.toString,
+      "--max_instances_per_offer", maxInstancesPerOffer.toString,
       "--min_revive_offers_interval", minReviveOffersInterval.toString,
       "--mesos_authentication_principal", "marathon"
     )
@@ -121,20 +123,37 @@ object MarathonTestHelper {
       .addResources(memResource)
       .addResources(diskResource)
 
-    portsResource.foreach(offerBuilder.addResources(_))
+    portsResource.foreach(offerBuilder.addResources)
 
     offerBuilder
   }
 
-  def mountSource(path: String): Mesos.Resource.DiskInfo.Source = {
-    Mesos.Resource.DiskInfo.Source.newBuilder.
-      setType(Mesos.Resource.DiskInfo.Source.Type.MOUNT).
-      setMount(Mesos.Resource.DiskInfo.Source.Mount.newBuilder.
-        setRoot(path)).
-      build
+  def makeBasicOfferWithUnavailability(startTime: Timestamp, duration: FiniteDuration = Duration(5, MINUTES)): Offer.Builder = {
+    val unavailableOfferBuilder = Unavailability.newBuilder()
+      .setStart(TimeInfo.newBuilder().setNanoseconds(startTime.nanos))
+
+    if (duration.isFinite()) {
+      unavailableOfferBuilder.setDuration(DurationInfo.newBuilder().setNanoseconds(duration.toNanos))
+    }
+
+    MarathonTestHelper.makeBasicOffer().setUnavailability(unavailableOfferBuilder.build())
   }
 
-  def mountDisk(path: String): Mesos.Resource.DiskInfo = {
+  def mountSource(path: Option[String]): Mesos.Resource.DiskInfo.Source = {
+    val b = Mesos.Resource.DiskInfo.Source.newBuilder.
+      setType(Mesos.Resource.DiskInfo.Source.Type.MOUNT)
+    path.foreach { p =>
+      b.setMount(Mesos.Resource.DiskInfo.Source.Mount.newBuilder.
+        setRoot(p))
+    }
+
+    b.build
+  }
+
+  def mountSource(path: String): Mesos.Resource.DiskInfo.Source =
+    mountSource(Some(path))
+
+  def mountDisk(path: Option[String]): Mesos.Resource.DiskInfo = {
     // val source = Mesos.Resource.DiskInfo.sour
     Mesos.Resource.DiskInfo.newBuilder.
       setSource(
@@ -142,21 +161,33 @@ object MarathonTestHelper {
         build
   }
 
-  def pathSource(path: String): Mesos.Resource.DiskInfo.Source = {
-    Mesos.Resource.DiskInfo.Source.newBuilder.
-      setType(Mesos.Resource.DiskInfo.Source.Type.PATH).
-      setPath(Mesos.Resource.DiskInfo.Source.Path.newBuilder.
-        setRoot(path)).
-      build
+  def mountDisk(path: String): Mesos.Resource.DiskInfo =
+    mountDisk(Some(path))
+
+  def pathSource(path: Option[String]): Mesos.Resource.DiskInfo.Source = {
+    val b = Mesos.Resource.DiskInfo.Source.newBuilder.
+      setType(Mesos.Resource.DiskInfo.Source.Type.PATH)
+    path.foreach { p =>
+      b.setPath(Mesos.Resource.DiskInfo.Source.Path.newBuilder.
+        setRoot(p))
+    }
+
+    b.build
   }
 
-  def pathDisk(path: String): Mesos.Resource.DiskInfo = {
+  def pathSource(path: String): Mesos.Resource.DiskInfo.Source =
+    pathSource(Some(path))
+
+  def pathDisk(path: Option[String]): Mesos.Resource.DiskInfo = {
     // val source = Mesos.Resource.DiskInfo.sour
     Mesos.Resource.DiskInfo.newBuilder.
       setSource(
         pathSource(path)).
         build
   }
+
+  def pathDisk(path: String): Mesos.Resource.DiskInfo =
+    pathDisk(Some(path))
 
   def scalarResource(
     name: String, d: Double, role: String = ResourceRole.Unreserved,
@@ -197,7 +228,7 @@ object MarathonTestHelper {
   def reservation(principal: String, labels: Map[String, String] = Map.empty): Mesos.Resource.ReservationInfo = {
     Mesos.Resource.ReservationInfo.newBuilder()
       .setPrincipal(principal)
-      .setLabels(LabelsSerializer.toMesosLabelsBuilder(labels))
+      .setLabels(labels.toMesosLabels)
       .build()
   }
 
@@ -224,6 +255,15 @@ object MarathonTestHelper {
           .setContainerPath(containerPath)
         )
       )
+  }
+
+  def newDomainInfo(region: String, zone: String): DomainInfo = {
+    DomainInfo.newBuilder
+      .setFaultDomain(
+        FaultDomain.newBuilder
+          .setZone(FaultDomain.ZoneInfo.newBuilder.setName(zone))
+          .setRegion(FaultDomain.RegionInfo.newBuilder.setName(region)))
+      .build
   }
 
   /**
@@ -287,7 +327,8 @@ object MarathonTestHelper {
   def makeBasicApp() = AppDefinition(
     id = "/test-app".toPath,
     resources = Resources(cpus = 1.0, mem = 64.0, disk = 1.0),
-    executor = "//cmd"
+    executor = "//cmd",
+    portDefinitions = Seq(PortDefinition(0))
   )
 
   lazy val appSchema = {
@@ -298,13 +339,13 @@ object MarathonTestHelper {
   }
 
   def validateJsonSchema(app: AppDefinition, valid: Boolean = true): Unit = {
-    import mesosphere.marathon.api.v2.json.Formats._
     // TODO: Revalidate the decision to disallow null values in schema
     // Possible resolution: Do not render null values in our formats by default anymore.
-    val appStr = Json.prettyPrint(JsonTestHelper.removeNullFieldValues(Json.toJson(app)))
+    val appStr = Json.prettyPrint(JsonTestHelper.removeNullFieldValues(Json.toJson(Raml.toRaml(app))))
     validateJsonSchemaForString(appStr, valid)
   }
 
+  // TODO(jdef) re-think validating against this schema; we should be validating against RAML instead
   def validateJsonSchemaForString(appStr: String, valid: Boolean): Unit = {
     val appJson = JsonLoader.fromString(appStr)
     val validationResult: ProcessingReport = appSchema.validate(appJson)
@@ -314,15 +355,17 @@ object MarathonTestHelper {
 
   def createTaskTrackerModule(
     leadershipModule: LeadershipModule,
-    store: Option[InstanceRepository] = None,
-    metrics: Metrics = new Metrics(new MetricRegistry))(implicit mat: Materializer): InstanceTrackerModule = {
+    store: Option[InstanceRepository] = None)(implicit mat: Materializer): InstanceTrackerModule = {
 
-    implicit val ctx = ExecutionContext.global
-    implicit val m = metrics
-    val instanceRepo = store.getOrElse(InstanceRepository.inMemRepository(new InMemoryPersistenceStore()))
+    implicit val ctx = ExecutionContexts.global
+    val instanceRepo = store.getOrElse {
+      val store = new InMemoryPersistenceStore()
+      store.markOpen()
+      InstanceRepository.inMemRepository(store)
+    }
     val updateSteps = Seq.empty[InstanceChangeHandler]
 
-    new InstanceTrackerModule(clock, metrics, defaultConfig(), leadershipModule, instanceRepo, updateSteps) {
+    new InstanceTrackerModule(clock, defaultConfig(), leadershipModule, instanceRepo, updateSteps) {
       // some tests create only one actor system but create multiple task trackers
       override protected lazy val instanceTrackerActorName: String = s"taskTracker_${Random.alphanumeric.take(10).mkString}"
     }
@@ -330,17 +373,17 @@ object MarathonTestHelper {
 
   def emptyInstance(): Instance = Instance(
     instanceId = Task.Id.forRunSpec(PathId("/test")).instanceId,
-    agentInfo = Instance.AgentInfo("", None, Nil),
+    agentInfo = Instance.AgentInfo("", None, None, None, Nil),
     state = InstanceState(Condition.Created, since = clock.now(), None, healthy = None),
     tasksMap = Map.empty[Task.Id, Task],
-    runSpecVersion = clock.now()
+    runSpecVersion = clock.now(),
+    UnreachableStrategy.default()
   )
 
   def createTaskTracker(
     leadershipModule: LeadershipModule,
-    store: Option[InstanceRepository] = None,
-    metrics: Metrics = new Metrics(new MetricRegistry))(implicit mat: Materializer): InstanceTracker = {
-    createTaskTrackerModule(leadershipModule, store, metrics).instanceTracker
+    store: Option[InstanceRepository] = None)(implicit mat: Materializer): InstanceTracker = {
+    createTaskTrackerModule(leadershipModule, store).instanceTracker
   }
 
   def persistentVolumeResources(taskId: Task.Id, localVolumeIds: Task.LocalVolumeId*) = localVolumeIds.map { id =>
@@ -358,7 +401,7 @@ object MarathonTestHelper {
       .setDisk(Mesos.Resource.DiskInfo.newBuilder()
         .setPersistence(Mesos.Resource.DiskInfo.Persistence.newBuilder().setId(id.idString))
         .setVolume(Mesos.Volume.newBuilder()
-          .setContainerPath(id.containerPath)
+          .setContainerPath(id.name)
           .setMode(Mesos.Volume.Mode.RW)))
       .build()
   }
@@ -367,13 +410,22 @@ object MarathonTestHelper {
     MarathonTestHelper.makeBasicOffer(
       reservation = Some(TaskLabels.labelsForTask(frameworkId, taskId)),
       role = "test"
-    ).addAllResources(persistentVolumeResources(taskId, localVolumeIds: _*)).build()
+    ).addAllResources(persistentVolumeResources(taskId, localVolumeIds: _*).asJava).build()
+  }
+
+  def offerWithVolumes(taskId: Task.Id, hostname: String, agentId: String, localVolumeIds: Task.LocalVolumeId*) = {
+    MarathonTestHelper.makeBasicOffer(
+      reservation = Some(TaskLabels.labelsForTask(frameworkId, taskId)),
+      role = "test"
+    ).setHostname(hostname)
+      .setSlaveId(Mesos.SlaveID.newBuilder().setValue(agentId).build())
+      .addAllResources(persistentVolumeResources(taskId, localVolumeIds: _*).asJava).build()
   }
 
   def offerWithVolumesOnly(taskId: Task.Id, localVolumeIds: Task.LocalVolumeId*) = {
     MarathonTestHelper.makeBasicOffer()
       .clearResources()
-      .addAllResources(persistentVolumeResources(taskId, localVolumeIds: _*))
+      .addAllResources(persistentVolumeResources(taskId, localVolumeIds: _*).asJava)
       .build()
   }
 
@@ -387,14 +439,9 @@ object MarathonTestHelper {
   }
 
   def mesosContainerWithPersistentVolume = Container.Mesos(
-    volumes = Seq[mesosphere.marathon.state.Volume](
-      PersistentVolume(
-        containerPath = "persistent-volume",
-        persistent = PersistentVolumeInfo(10), // must match persistentVolumeResources
-        mode = Mesos.Volume.Mode.RW
-      )
-    )
-  )
+    volumes = Seq(VolumeWithMount(
+      volume = PersistentVolume(name = None, persistent = PersistentVolumeInfo(10)), // must match persistentVolumeResources
+      mount = VolumeMount(volumeName = None, mountPath = "persistent-volume"))))
 
   def mesosIpAddress(ipAddress: String) = {
     Mesos.NetworkInfo.IPAddress.newBuilder().setIpAddress(ipAddress).build
@@ -415,15 +462,13 @@ object MarathonTestHelper {
 
       def withNoPortDefinitions(): AppDefinition = app.withPortDefinitions(Seq.empty)
 
-      def withIpAddress(ipAddress: IpAddress): AppDefinition = app.copy(ipAddress = Some(ipAddress))
-
-      def withDockerNetwork(network: Mesos.ContainerInfo.DockerInfo.Network): AppDefinition = {
+      def withDockerNetworks(networks: Network*): AppDefinition = {
         val docker = app.container.getOrElse(Container.Mesos()) match {
           case docker: Docker => docker
           case _ => Docker(image = "busybox")
         }
 
-        app.copy(container = Some(docker.copy(network = Some(network))))
+        app.copy(container = Some(docker), networks = networks.to[Seq])
       }
 
       def withPortMappings(newPortMappings: Seq[PortMapping]): AppDefinition = {
@@ -449,7 +494,7 @@ object MarathonTestHelper {
 
       def withNetworkInfo(hostName: Option[String] = None, hostPorts: Seq[Int] = Nil, networkInfos: scala.collection.Seq[NetworkInfo] = Nil): Task = {
         def containerStatus(networkInfos: scala.collection.Seq[NetworkInfo]) = {
-          Mesos.ContainerStatus.newBuilder().addAllNetworkInfos(networkInfos)
+          Mesos.ContainerStatus.newBuilder().addAllNetworkInfos(networkInfos.asJava)
         }
         def mesosStatus(taskId: Task.Id, mesosStatus: Option[TaskStatus], networkInfos: scala.collection.Seq[NetworkInfo]): Option[TaskStatus] = {
           val taskState = mesosStatus.fold(TaskState.TASK_STAGING)(_.getState)

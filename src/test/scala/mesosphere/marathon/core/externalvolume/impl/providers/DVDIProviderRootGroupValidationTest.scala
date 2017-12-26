@@ -1,13 +1,13 @@
 package mesosphere.marathon
 package core.externalvolume.impl.providers
 
-import com.wix.accord.{ Failure, Result, RuleViolation, Success }
+import com.wix.accord.{ Failure, Result, Success }
 import mesosphere.UnitTest
 import mesosphere.marathon.api.v2.Validation
+import mesosphere.marathon.api.v2.Validation.ConstraintViolation
 import mesosphere.marathon.core.externalvolume.ExternalVolumes
 import mesosphere.marathon.state._
 import mesosphere.marathon.test.GroupCreation
-import org.apache.mesos.{ Protos => MesosProtos }
 import play.api.libs.json.{ JsString, Json }
 
 import scala.collection.immutable.Seq
@@ -27,9 +27,11 @@ class DVDIProviderRootGroupValidationTest extends UnitTest with GroupCreation {
             apps = Map(
               app1.id -> app1,
               app2.id -> app2
-            )
+            ),
+            validate = false
           )
-        )
+        ),
+        validate = false
       )
 
       f.checkResult(
@@ -50,23 +52,23 @@ class DVDIProviderRootGroupValidationTest extends UnitTest with GroupCreation {
             apps = Map(
               app1.id -> app1,
               app2.id -> app2
-            )
+            ),
+            validate = false
           )
-        )
+        ),
+        validate = false
       )
 
       f.checkResult(
         rootGroup,
         expectedViolations = Set(
-          RuleViolation(
-            value = app1.externalVolumes.head,
+          ConstraintViolation(
             constraint = "Volume name 'vol' in /nested/app1 conflicts with volume(s) of same name in app(s): /nested/app2",
-            description = Some("/groups(0)/apps(0)/externalVolumes(0)")
+            path = "/groups(0)/apps(0)/externalVolumes(0)"
           ),
-          RuleViolation(
-            value = app2.externalVolumes.head,
+          ConstraintViolation(
             constraint = "Volume name 'vol' in /nested/app2 conflicts with volume(s) of same name in app(s): /nested/app1",
-            description = Some("/groups(0)/apps(1)/externalVolumes(0)")
+            path = "/groups(0)/apps(1)/externalVolumes(0)"
           )
         )
       )
@@ -81,21 +83,18 @@ class DVDIProviderRootGroupValidationTest extends UnitTest with GroupCreation {
           container = Some(
             Container.Mesos(
               volumes = Seq(
-                ExternalVolume(
-                  containerPath = "ignoreme",
-                  external = ExternalVolumeInfo(
-                    name = volumeName,
-                    provider = provider,
-                    options = Map(
-                      DVDIProvider.driverOption -> "rexray"
-                    )
-                  ),
-                  mode = MesosProtos.Volume.Mode.RW
-                )
-              )
-            )
-          )
-        )
+                VolumeWithMount(
+                  volume = ExternalVolume(
+                    name = None,
+                    external = ExternalVolumeInfo(
+                      name = volumeName,
+                      provider = provider,
+                      options = Map(
+                        DVDIProvider.driverOption -> "rexray"))),
+                  mount = VolumeMount(
+                    volumeName = None,
+                    mountPath = "ignoreme",
+                    readOnly = false))))))
       }
 
       def jsonResult(result: Result): String = {
@@ -107,7 +106,7 @@ class DVDIProviderRootGroupValidationTest extends UnitTest with GroupCreation {
         )
       }
 
-      def checkResult(rootGroup: RootGroup, expectedViolations: Set[RuleViolation]): Unit = {
+      def checkResult(rootGroup: RootGroup, expectedViolations: Set[ConstraintViolation]): Unit = {
         val expectFailure = expectedViolations.nonEmpty
 
         When("validating the root group")
@@ -121,17 +120,17 @@ class DVDIProviderRootGroupValidationTest extends UnitTest with GroupCreation {
         withClue(jsonResult(externalVolumesResult)) { externalVolumesResult.isFailure should be(expectFailure) }
 
         And("global validation agrees")
-        val globalResult: Result = RootGroup.valid(Set("external_volumes"))(rootGroup)
+        val globalResult: Result = RootGroup.rootGroupValidator(Set("external_volumes"))(rootGroup)
         withClue(jsonResult(globalResult)) { globalResult.isFailure should be(expectFailure) }
 
         val ruleViolations = globalResult match {
-          case Success => Set.empty[RuleViolation]
-          case f: Failure => f.violations.flatMap(Validation.allRuleViolationsWithFullDescription(_))
+          case Success => Seq.empty[ConstraintViolation]
+          case f: Failure => Validation.allViolations(f)
         }
 
         And("the rule violations are the expected ones")
         withClue(jsonResult(globalResult)) {
-          ruleViolations should equal(expectedViolations)
+          ruleViolations.toSet should equal(expectedViolations)
         }
       }
     }

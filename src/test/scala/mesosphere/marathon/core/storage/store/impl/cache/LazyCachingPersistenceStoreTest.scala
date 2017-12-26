@@ -1,4 +1,5 @@
-package mesosphere.marathon.core.storage.store.impl.cache
+package mesosphere.marathon
+package core.storage.store.impl.cache
 
 import java.util.UUID
 
@@ -6,39 +7,40 @@ import akka.Done
 import akka.http.scaladsl.marshalling.Marshaller
 import akka.http.scaladsl.unmarshalling.Unmarshaller
 import akka.stream.scaladsl.Sink
-import com.codahale.metrics.MetricRegistry
 import mesosphere.AkkaUnitTest
-import mesosphere.marathon.core.storage.store.{ IdResolver, PersistenceStoreTest, TestClass1 }
 import mesosphere.marathon.core.storage.store.impl.InMemoryTestClass1Serialization
 import mesosphere.marathon.core.storage.store.impl.memory.InMemoryPersistenceStore
 import mesosphere.marathon.core.storage.store.impl.zk.{ ZkPersistenceStore, ZkTestClass1Serialization }
+import mesosphere.marathon.core.storage.store.{ IdResolver, PersistenceStoreTest, TestClass1 }
 import mesosphere.marathon.integration.setup.ZookeeperServerTest
-import mesosphere.marathon.metrics.Metrics
 import mesosphere.marathon.storage.store.InMemoryStoreSerialization
 import mesosphere.marathon.test.SettableClock
 
 import scala.concurrent.duration._
 
 class LazyCachingPersistenceStoreTest extends AkkaUnitTest
-    with PersistenceStoreTest with ZkTestClass1Serialization with ZookeeperServerTest
-    with InMemoryStoreSerialization with InMemoryTestClass1Serialization {
+  with PersistenceStoreTest with ZkTestClass1Serialization with ZookeeperServerTest
+  with InMemoryStoreSerialization with InMemoryTestClass1Serialization {
 
   private def cachedInMemory = {
-    implicit val metrics = new Metrics(new MetricRegistry)
-    LazyCachingPersistenceStore(new InMemoryPersistenceStore())
+    val store = LazyCachingPersistenceStore(new InMemoryPersistenceStore())
+    store.markOpen()
+    store
   }
 
-  private def withLazyVersionCaching = LazyVersionCachingPersistentStore(cachedInMemory)
+  private def withLazyVersionCaching = {
+    val store = LazyVersionCachingPersistentStore(new InMemoryPersistenceStore())
+    store.markOpen()
+    store
+  }
 
-  def zkStore: ZkPersistenceStore = {
-    implicit val metrics = new Metrics(new MetricRegistry)
-
+  private def cachedZk = {
     val root = UUID.randomUUID().toString
     val client = zkClient(namespace = Some(root))
-    new ZkPersistenceStore(client, Duration.Inf, 8)
+    val store = LazyCachingPersistenceStore(new ZkPersistenceStore(client, Duration.Inf, 8))
+    store.markOpen()
+    store
   }
-
-  private def cachedZk = LazyCachingPersistenceStore(zkStore)
 
   behave like basicPersistenceStore("LazyCache(InMemory)", cachedInMemory)
   behave like basicPersistenceStore("LazyCache(Zk)", cachedZk)
@@ -82,10 +84,6 @@ class LazyCachingPersistenceStoreTest extends AkkaUnitTest
 
         val storageId = ir.toStorageId("task-1", None)
         val cacheKey = (ir.category, storageId)
-
-        store.versionCache.size should be(1)
-        store.versionCache.contains(cacheKey) should be(true)
-        store.versionCache(cacheKey) should contain theSameElementsAs Seq(original.version, updated.version)
 
         store.versionedValueCache.size should be(2)
         store.versionedValueCache((storageId, original.version)) should be(Some(original))
@@ -146,7 +144,7 @@ class LazyCachingPersistenceStoreTest extends AkkaUnitTest
         store.versionedValueCache.size should be(1)
         store.versionedValueCache.contains((storageId, original.version)) should be(true)
 
-        store.versionCache.size should be(1)
+        store.versionCache.size should be(0)
       }
 
       "reload versionedValueCache upon unversioned get requests" in {
@@ -167,8 +165,25 @@ class LazyCachingPersistenceStoreTest extends AkkaUnitTest
 
         store.versionedValueCache.size should be(1)
         store.versionedValueCache.contains((storageId, updated.version)) should be(true)
+      }
 
-        store.versionCache.size should be(1)
+      "versions available in the persistence store are cached correctly" in {
+        implicit val clock = new SettableClock()
+        val store = newStore
+        val underlying = store.store
+
+        // 1 version available in the cache and 2 in the underlying store
+        store.store("test", TestClass1("abc", 1)).futureValue should be(Done)
+        clock.plus(1.minute)
+        underlying.store("test", TestClass1("abc", 2)).futureValue should be(Done)
+        clock.plus(1.minute)
+        underlying.store("test", TestClass1("abc", 3)).futureValue should be(Done)
+
+        store.versionCache.size should be(0)
+        // a call to versions will update the cache
+        store.versions("test").runWith(Sink.seq).futureValue should have size 3
+        store.versionCache should have size 1
+        store.versionCache((ir.category, ir.toStorageId("test", None))) should have size 3
       }
     }
   }

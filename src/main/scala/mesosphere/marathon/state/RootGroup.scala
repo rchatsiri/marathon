@@ -18,19 +18,17 @@ import scala.collection.JavaConverters._
   * and all of the modifying operations are defined at this level.
   */
 class RootGroup(
-  apps: Map[AppDefinition.AppKey, AppDefinition] = Group.defaultApps,
-  pods: Map[PathId, PodDefinition] = Group.defaultPods,
-  groupsById: Map[Group.GroupKey, Group] = Group.defaultGroups,
-  dependencies: Set[PathId] = Group.defaultDependencies,
-  version: Timestamp = Group.defaultVersion) extends Group(
+    apps: Map[AppDefinition.AppKey, AppDefinition] = Group.defaultApps,
+    pods: Map[PathId, PodDefinition] = Group.defaultPods,
+    groupsById: Map[Group.GroupKey, Group] = Group.defaultGroups,
+    dependencies: Set[PathId] = Group.defaultDependencies,
+    version: Timestamp = Group.defaultVersion) extends Group(
   PathId.empty,
   apps,
   pods,
   groupsById,
   dependencies,
-  version,
-  apps ++ groupsById.values.flatMap(_.transitiveAppsById),
-  pods ++ groupsById.values.flatMap(_.transitivePodsById)) {
+  version) {
   require(
     groupsById.forall {
       case (_, _: RootGroup) => false
@@ -38,7 +36,7 @@ class RootGroup(
     },
     "`RootGroup` cannot be a child of `RootGroup`.")
 
-  private lazy val applicationDependencies: List[(AppDefinition, AppDefinition)] = {
+  lazy val applicationDependencies: List[(AppDefinition, AppDefinition)] = {
     var result = List.empty[(AppDefinition, AppDefinition)]
 
     //group->group dependencies
@@ -55,7 +53,7 @@ class RootGroup(
       group <- transitiveGroupsById.values.filter(_.apps.nonEmpty)
       app <- group.apps.values
       dependencyId <- app.dependencies
-      dependentApp = transitiveAppsById.get(dependencyId).map(Set(_))
+      dependentApp = this.app(dependencyId).map(Set(_))
       dependentGroup = transitiveGroupsById.get(dependencyId).map(_.transitiveApps)
       dependent <- dependentApp orElse dependentGroup getOrElse Set.empty
     } result ::= app -> dependent
@@ -68,7 +66,7 @@ class RootGroup(
     */
   lazy val dependencyGraph: DirectedGraph[RunSpec, DefaultEdge] = {
     val graph = new DefaultDirectedGraph[RunSpec, DefaultEdge](classOf[DefaultEdge])
-    for (runnableSpec <- transitiveRunSpecsById.values) graph.addVertex(runnableSpec)
+    for (runnableSpec <- transitiveRunSpecs) graph.addVertex(runnableSpec)
     for ((app, dependent) <- applicationDependencies) graph.addEdge(app, dependent)
     new UnmodifiableDirectedGraph(graph)
   }
@@ -99,8 +97,7 @@ class RootGroup(
     * @param version the new version of the root group
     * @return the new root group with `newGroup` added.
     */
-  def putGroup(newGroup: Group, version: Timestamp): RootGroup = {
-    val oldGroup = group(newGroup.id).getOrElse(Group.empty(newGroup.id))
+  def putGroup(newGroup: Group, version: Timestamp = Group.defaultVersion): RootGroup = {
     @tailrec def rebuildTree(allParents: List[PathId], result: Group): Group = {
       allParents match {
         case Nil => result
@@ -112,9 +109,7 @@ class RootGroup(
             pods = oldParent.pods,
             groupsById = oldParent.groupsById + (result.id -> result),
             dependencies = oldParent.dependencies,
-            version = version,
-            transitiveAppsById = oldParent.transitiveAppsById -- oldGroup.apps.keys ++ newGroup.apps,
-            transitivePodsById = oldParent.transitivePodsById -- oldGroup.pods.keys ++ newGroup.pods)
+            version = version)
           rebuildTree(tail, newParent)
       }
     }
@@ -149,7 +144,8 @@ class RootGroup(
     * @param version the new version of the root group
     * @return the new root group with group with id `groupId`.
     */
-  def updateTransitiveApps(groupId: PathId, app: AppDefinition => AppDefinition, version: Timestamp): RootGroup = {
+  def updateTransitiveApps(
+    groupId: PathId, app: AppDefinition => AppDefinition, version: Timestamp = Group.defaultVersion): RootGroup = {
     def updateApps(group: Group): Group = {
       Group(
         id = group.id,
@@ -157,9 +153,7 @@ class RootGroup(
         pods = group.pods,
         groupsById = group.groupsById.map { case (subGroupId, subGroup) => subGroupId -> updateApps(subGroup) },
         dependencies = group.dependencies,
-        version = version,
-        transitiveAppsById = group.transitiveAppsById.map { case (appId, appDef) => appId -> app(appDef) },
-        transitivePodsById = group.transitivePodsById)
+        version = version)
     }
     val oldGroup = group(groupId).getOrElse(Group.empty(groupId))
     val newGroup = updateApps(oldGroup)
@@ -182,7 +176,7 @@ class RootGroup(
   def updateApps(
     groupId: PathId,
     apps: Map[AppDefinition.AppKey, AppDefinition] => Map[AppDefinition.AppKey, AppDefinition],
-    version: Timestamp): RootGroup = {
+    version: Timestamp = Group.defaultVersion): RootGroup = {
     val oldGroup = group(groupId).getOrElse(Group.empty(groupId))
     val oldApps = oldGroup.apps
     val newApps = apps(oldApps)
@@ -192,9 +186,7 @@ class RootGroup(
       pods = oldGroup.pods,
       groupsById = oldGroup.groupsById,
       dependencies = oldGroup.dependencies,
-      version = version,
-      transitiveAppsById = oldGroup.transitiveAppsById -- oldApps.keys ++ newApps,
-      transitivePodsById = oldGroup.transitivePodsById)
+      version = version)
     putGroup(newGroup, version)
   }
 
@@ -211,7 +203,8 @@ class RootGroup(
     * @param version the new version of the root group
     * @return the new root group with the specified group updated.
     */
-  def updateDependencies(groupId: PathId, dependencies: Set[PathId] => Set[PathId], version: Timestamp): RootGroup = {
+  def updateDependencies(
+    groupId: PathId, dependencies: Set[PathId] => Set[PathId], version: Timestamp = Group.defaultVersion): RootGroup = {
     val oldGroup = group(groupId).getOrElse(Group.empty(groupId))
     val oldDependencies = oldGroup.dependencies
     val newDependencies = dependencies(oldDependencies)
@@ -221,9 +214,7 @@ class RootGroup(
       pods = oldGroup.pods,
       groupsById = oldGroup.groupsById,
       dependencies = newDependencies,
-      version = version,
-      transitiveAppsById = oldGroup.transitiveAppsById,
-      transitivePodsById = oldGroup.transitivePodsById
+      version = version
     )
     putGroup(newGroup, version)
   }
@@ -243,7 +234,8 @@ class RootGroup(
     * @param version the new version of the root group
     * @return the new root group with the specified app updated.
     */
-  def updateApp(appId: PathId, fn: Option[AppDefinition] => AppDefinition, version: Timestamp): RootGroup = {
+  def updateApp(
+    appId: PathId, fn: Option[AppDefinition] => AppDefinition, version: Timestamp = Group.defaultVersion): RootGroup = {
     val oldGroup = group(appId.parent).getOrElse(Group.empty(appId.parent))
     val newApp = fn(app(appId))
     require(newApp.id == appId, "app id must not be changed by `fn`.")
@@ -258,9 +250,7 @@ class RootGroup(
         case (_, group) => group.id != newApp.id || group.containsApps || group.containsPods
       },
       dependencies = oldGroup.dependencies,
-      version = version,
-      transitiveAppsById = oldGroup.transitiveAppsById + (newApp.id -> newApp),
-      transitivePodsById = oldGroup.transitivePodsById)
+      version = version)
     putGroup(newGroup, version)
   }
 
@@ -279,7 +269,8 @@ class RootGroup(
     * @param version the new version of the root group
     * @return the new root group with the specified pod updated.
     */
-  def updatePod(podId: PathId, fn: Option[PodDefinition] => PodDefinition, version: Timestamp): RootGroup = {
+  def updatePod(
+    podId: PathId, fn: Option[PodDefinition] => PodDefinition, version: Timestamp = Group.defaultVersion): RootGroup = {
     val oldGroup = group(podId.parent).getOrElse(Group.empty(podId.parent))
     val newPod = fn(pod(podId))
     require(newPod.id == podId, "pod id must not be changed by `fn`.")
@@ -294,9 +285,7 @@ class RootGroup(
         case (_, group) => group.id != newPod.id || group.containsApps || group.containsPods
       },
       dependencies = oldGroup.dependencies,
-      version = version,
-      transitiveAppsById = oldGroup.transitiveAppsById,
-      transitivePodsById = oldGroup.transitivePodsById + (newPod.id -> newPod))
+      version = version)
     putGroup(newGroup, version)
   }
 
@@ -307,9 +296,7 @@ class RootGroup(
       pods = group.pods,
       groupsById = group.groupsById.map { case (subGroupId, subGroup) => subGroupId -> updateVersion(subGroup, version) },
       dependencies = group.dependencies,
-      version = version,
-      transitiveAppsById = group.transitiveAppsById,
-      transitivePodsById = group.transitivePodsById)
+      version = version)
   }
 
   /**
@@ -317,7 +304,9 @@ class RootGroup(
     *
     * @param version the new version of the root group.
     */
-  def updateVersion(version: Timestamp): RootGroup = RootGroup.fromGroup(updateVersion(this, version))
+  def updateVersion(version: Timestamp = Group.defaultVersion): RootGroup = {
+    RootGroup.fromGroup(updateVersion(this, version))
+  }
 
   /**
     * Remove the group with the specified group id.
@@ -328,7 +317,7 @@ class RootGroup(
     * @param version the new version of the root group
     * @return the new root group with the specified group removed.
     */
-  def removeGroup(groupId: PathId, version: Timestamp = Timestamp.now()): RootGroup = {
+  def removeGroup(groupId: PathId, version: Timestamp = Group.defaultVersion): RootGroup = {
     require(!groupId.isRoot, "The root group cannot be removed.")
     group(groupId).fold(updateVersion(version)) { oldGroup =>
       val oldParent = transitiveGroupsById(oldGroup.id.parent)
@@ -339,9 +328,7 @@ class RootGroup(
           pods = oldParent.pods,
           groupsById = oldParent.groupsById - oldGroup.id,
           dependencies = oldParent.dependencies,
-          version = version,
-          transitiveAppsById = oldParent.transitiveAppsById -- oldGroup.transitiveAppsById.keys,
-          transitivePodsById = oldParent.transitivePodsById -- oldGroup.transitivePodsById.keys), version)
+          version = version), version)
     }
   }
 
@@ -354,7 +341,7 @@ class RootGroup(
     * @param version the new version of the root group
     * @return the new root group with the specified app removed.
     */
-  def removeApp(appId: PathId, version: Timestamp = Timestamp.now()): RootGroup = {
+  def removeApp(appId: PathId, version: Timestamp = Group.defaultVersion): RootGroup = {
     app(appId).fold(updateVersion(version)) { oldApp =>
       val oldGroup = transitiveGroupsById(oldApp.id.parent)
       putGroup(Group(
@@ -363,9 +350,7 @@ class RootGroup(
         pods = oldGroup.pods,
         groupsById = oldGroup.groupsById,
         dependencies = oldGroup.dependencies,
-        version = version,
-        transitiveAppsById = oldGroup.transitiveAppsById - oldApp.id,
-        transitivePodsById = oldGroup.transitivePodsById), version)
+        version = version), version)
     }
   }
 
@@ -378,7 +363,7 @@ class RootGroup(
     * @param version the new version of the root group
     * @return the new root group with the specified pod removed.
     */
-  def removePod(podId: PathId, version: Timestamp = Timestamp.now()): RootGroup = {
+  def removePod(podId: PathId, version: Timestamp = Group.defaultVersion): RootGroup = {
     pod(podId).fold(updateVersion(version)) { oldPod =>
       val oldGroup = transitiveGroupsById(oldPod.id.parent)
       putGroup(Group(
@@ -387,9 +372,7 @@ class RootGroup(
         pods = oldGroup.pods - oldPod.id,
         groupsById = oldGroup.groupsById,
         dependencies = oldGroup.dependencies,
-        version = version,
-        transitiveAppsById = oldGroup.transitiveAppsById,
-        transitivePodsById = oldGroup.transitivePodsById - oldPod.id), version)
+        version = version), version)
     }
   }
 
@@ -402,12 +385,10 @@ class RootGroup(
       Group(
         id = group.id,
         apps = group.apps.map { case (appId, app) => appId -> app.copy(versionInfo = VersionInfo.NoVersion) },
-        pods = group.pods.map { case (podId, pod) => podId -> pod.copy(version = Timestamp(0)) },
+        pods = group.pods.map { case (podId, pod) => podId -> pod.copy(versionInfo = VersionInfo.NoVersion) },
         groupsById = group.groupsById.map { case (subGroupId, subGroup) => subGroupId -> in(subGroup) },
         dependencies = group.dependencies,
-        version = Timestamp(0),
-        transitiveAppsById = group.transitiveAppsById.map { case (appId, app) => appId -> app.copy(versionInfo = VersionInfo.NoVersion) },
-        transitivePodsById = group.transitivePodsById.map { case (podId, pod) => podId -> pod.copy(version = Timestamp(0)) })
+        version = Timestamp(0))
     }
     RootGroup.fromGroup(in(this))
   }
@@ -428,9 +409,9 @@ object RootGroup {
     RootGroup(group.apps, group.pods, group.groupsById, group.dependencies, group.version)
   }
 
-  def valid(enabledFeatures: Set[String]): Validator[RootGroup] = {
+  def rootGroupValidator(enabledFeatures: Set[String]): Validator[RootGroup] = {
     noCyclicDependencies and
-      Group.valid(PathId.empty, enabledFeatures) and
+      Group.validGroup(PathId.empty, enabledFeatures) and
       ExternalVolumes.validRootGroup()
   }
 

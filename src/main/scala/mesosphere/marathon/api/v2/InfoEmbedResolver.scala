@@ -1,4 +1,5 @@
-package mesosphere.marathon.api.v2
+package mesosphere.marathon
+package api.v2
 
 import mesosphere.marathon.core.appinfo.{ GroupInfo, AppInfo }
 import org.slf4j.LoggerFactory
@@ -6,7 +7,7 @@ import org.slf4j.LoggerFactory
 /**
   * Resolves AppInfo.Embed and GroupInfo.Embed from query parameters.
   */
-private[v2] object InfoEmbedResolver {
+private[api] object InfoEmbedResolver {
   private[this] val log = LoggerFactory.getLogger(getClass)
 
   private[this] val EmbedAppsPrefixes = Set("group.apps.", "apps.", "app.")
@@ -21,9 +22,9 @@ private[v2] object InfoEmbedResolver {
   private[this] val EmbedCounts = "counts"
   private[this] val EmbedTaskStats = "taskStats"
 
-  private[v2] val EmbedGroups = "group.groups"
-  private[v2] val EmbedApps = "group.apps"
-  private[v2] val EmbedPods = "group.pods"
+  private[api] val EmbedGroups = "group.groups"
+  private[api] val EmbedApps = "group.apps"
+  private[api] val EmbedPods = "group.pods"
 
   /**
     * Converts embed arguments to our internal representation.

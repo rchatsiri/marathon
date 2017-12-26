@@ -11,11 +11,32 @@ trait ConstraintConversion {
       case ConstraintOperator.Like => Protos.Constraint.Operator.LIKE
       case ConstraintOperator.Unlike => Protos.Constraint.Operator.UNLIKE
       case ConstraintOperator.MaxPer => Protos.Constraint.Operator.MAX_PER
+      case ConstraintOperator.Is => Protos.Constraint.Operator.IS
     }
 
     val builder = Protos.Constraint.newBuilder().setField(raml.fieldName).setOperator(operator)
     raml.value.foreach(builder.setValue)
     builder.build()
+  }
+
+  implicit val appConstraintRamlReader: Reads[Seq[String], Protos.Constraint] = Reads { raw =>
+    // this is not a substite for validation, but does ensure that we're not translating invalid operators
+    def validOperator(op: String): Boolean = ConstraintConversion.ValidOperators.contains(op)
+    val result: Protos.Constraint = (raw.lift(0), raw.lift(1), raw.lift(2)) match {
+      case (Some(field), Some(op), None) if validOperator(op) =>
+        Protos.Constraint.newBuilder()
+          .setField(field)
+          .setOperator(Protos.Constraint.Operator.valueOf(op))
+          .build()
+      case (Some(field), Some(op), Some(value)) if validOperator(op) =>
+        Protos.Constraint.newBuilder()
+          .setField(field)
+          .setOperator(Protos.Constraint.Operator.valueOf(op))
+          .setValue(value)
+          .build()
+      case _ => throw SerializationFailedException(s"illegal constraint specification ${raw.mkString(",")}")
+    }
+    result
   }
 
   implicit val constraintRamlWriter: Writes[Protos.Constraint, Constraint] = Writes { c =>
@@ -26,8 +47,9 @@ trait ConstraintConversion {
       case Protos.Constraint.Operator.LIKE => ConstraintOperator.Like
       case Protos.Constraint.Operator.UNLIKE => ConstraintOperator.Unlike
       case Protos.Constraint.Operator.MAX_PER => ConstraintOperator.MaxPer
+      case Protos.Constraint.Operator.IS => ConstraintOperator.Is
     }
-    Constraint(c.getField, operator, Option(c.getValue))
+    Constraint(c.getField, operator, if (c.hasValue) Some(c.getValue) else None)
   }
 
   implicit val constraintToSeqStringWrites: Writes[Protos.Constraint, Seq[String]] = Writes { constraint =>
@@ -39,4 +61,6 @@ trait ConstraintConversion {
   }
 }
 
-object ConstraintConversion extends ConstraintConversion
+object ConstraintConversion extends ConstraintConversion {
+  val ValidOperators: Set[String] = Protos.Constraint.Operator.values().map(_.toString)(collection.breakOut)
+}

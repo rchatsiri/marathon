@@ -1,8 +1,10 @@
 package mesosphere.marathon
 package core.appinfo.impl
 
+import java.time.Clock
+
 import mesosphere.marathon.core.appinfo.{ AppInfo, EnrichedTask, TaskCounts, TaskStatsByVersion }
-import mesosphere.marathon.core.base.Clock
+import mesosphere.marathon.core.deployment.{ DeploymentPlan, DeploymentStepInfo }
 import mesosphere.marathon.core.group.GroupManager
 import mesosphere.marathon.core.health.{ Health, HealthCheckManager }
 import mesosphere.marathon.core.instance.Instance
@@ -12,13 +14,11 @@ import mesosphere.marathon.core.task.tracker.InstanceTracker
 import mesosphere.marathon.raml.{ PodInstanceState, PodInstanceStatus, PodState, PodStatus, Raml }
 import mesosphere.marathon.state._
 import mesosphere.marathon.storage.repository.TaskFailureRepository
-import mesosphere.marathon.upgrade.DeploymentManager.DeploymentStepInfo
-import mesosphere.marathon.upgrade.DeploymentPlan
 import org.slf4j.LoggerFactory
 
 import scala.async.Async.{ async, await }
 import scala.collection.immutable.{ Map, Seq }
-import scala.concurrent.{ ExecutionContext, Future }
+import scala.concurrent.Future
 import scala.util.control.NonFatal
 
 // TODO(jdef) pods rename this to something like ResourceInfoBaseData
@@ -31,8 +31,7 @@ class AppInfoBaseData(
     groupManager: GroupManager) {
 
   import AppInfoBaseData._
-
-  import scala.concurrent.ExecutionContext.Implicits.global
+  import mesosphere.marathon.core.async.ExecutionContexts.global
 
   if (log.isDebugEnabled) log.debug(s"new AppInfoBaseData $this")
 
@@ -148,7 +147,7 @@ class AppInfoBaseData(
       log.debug(s"assembling rich tasks for app [${app.id}]")
       def statusesToEnrichedTasks(instances: Seq[Instance], statuses: Map[Instance.Id, collection.Seq[Health]]): Seq[EnrichedTask] = {
         instances.map { instance =>
-          EnrichedTask(app.id, instance.appTask, instance.agentInfo, statuses.getOrElse(instance.instanceId, Seq.empty[Health]))
+          EnrichedTask(app.id, instance.appTask, instance.agentInfo, statuses.getOrElse(instance.instanceId, Seq.empty[Health]).to[Seq])
         }
       }
 
@@ -169,7 +168,7 @@ class AppInfoBaseData(
   }
 
   @SuppressWarnings(Array("all")) // async/await
-  def podStatus(podDef: PodDefinition)(implicit ec: ExecutionContext): Future[PodStatus] =
+  def podStatus(podDef: PodDefinition): Future[PodStatus] =
     async { // linter:ignore UnnecessaryElseBranch
       val now = clock.now().toOffsetDateTime
       val instances = await(instancesByRunSpecFuture).specInstances(podDef.id)
@@ -180,7 +179,7 @@ class AppInfoBaseData(
         }
       )).toMap
       val instanceStatus = instances.flatMap { inst => podInstanceStatus(inst)(specByVersion.apply) }
-      val statusSince = if (instances.isEmpty) now else instanceStatus.map(_.statusSince).max
+      val statusSince = if (instanceStatus.isEmpty) now else instanceStatus.map(_.statusSince).max
       val state = await(podState(podDef.instances, instanceStatus, isPodTerminating(podDef.id)))
 
       // TODO(jdef) pods need termination history
@@ -214,7 +213,7 @@ class AppInfoBaseData(
   protected def podState(
     expectedInstanceCount: Integer,
     instanceStatus: Seq[PodInstanceStatus],
-    isPodTerminating: Future[Boolean])(implicit ec: ExecutionContext): Future[PodState] =
+    isPodTerminating: Future[Boolean]): Future[PodState] =
 
     async { // linter:ignore UnnecessaryElseBranch
       val terminal = await(isPodTerminating)

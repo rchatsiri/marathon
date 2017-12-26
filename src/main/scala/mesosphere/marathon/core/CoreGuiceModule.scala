@@ -1,16 +1,19 @@
 package mesosphere.marathon
 package core
 
+import java.time.Clock
 import javax.inject.Named
 
 import akka.actor.{ ActorRef, Props }
 import akka.stream.Materializer
 import com.google.inject._
 import com.google.inject.name.Names
+import com.typesafe.config.Config
+import mesosphere.marathon.api.GroupApiService
 import mesosphere.marathon.core.appinfo.{ AppInfoModule, AppInfoService, GroupInfoService, PodStatusService }
-import mesosphere.marathon.core.base.Clock
+import mesosphere.marathon.core.async.ExecutionContexts
+import mesosphere.marathon.core.deployment.DeploymentManager
 import mesosphere.marathon.core.election.ElectionService
-import mesosphere.marathon.core.event.HttpCallbackSubscriptionService
 import mesosphere.marathon.core.group.GroupManager
 import mesosphere.marathon.core.health.HealthCheckManager
 import mesosphere.marathon.core.instance.update.InstanceChangeHandler
@@ -20,10 +23,10 @@ import mesosphere.marathon.core.leadership.{ LeadershipCoordinator, LeadershipMo
 import mesosphere.marathon.core.plugin.{ PluginDefinitions, PluginManager }
 import mesosphere.marathon.core.pod.PodManager
 import mesosphere.marathon.core.readiness.ReadinessCheckExecutor
-import mesosphere.marathon.core.task.bus.{ TaskChangeObservables, TaskStatusEmitter }
+import mesosphere.marathon.core.storage.store.PersistenceStore
 import mesosphere.marathon.core.task.jobs.TaskJobsModule
 import mesosphere.marathon.core.task.termination.KillService
-import mesosphere.marathon.core.task.tracker.{ InstanceCreationHandler, InstanceTracker, TaskStateOpProcessor }
+import mesosphere.marathon.core.task.tracker.{ InstanceStateOpProcessor, InstanceTracker }
 import mesosphere.marathon.core.task.update.TaskStatusUpdateProcessor
 import mesosphere.marathon.core.task.update.impl.steps._
 import mesosphere.marathon.core.task.update.impl.{ TaskStatusUpdateProcessorImpl, ThrottlingTaskStatusUpdateProcessor }
@@ -32,7 +35,7 @@ import mesosphere.marathon.plugin.http.HttpRequestHandler
 import mesosphere.marathon.storage.migration.Migration
 import mesosphere.marathon.storage.repository._
 import mesosphere.marathon.util.WorkQueue
-import mesosphere.marathon.{ MarathonConf, ModuleNames, PrePostDriverCallback }
+import org.apache.mesos.Scheduler
 import org.eclipse.jetty.servlets.EventSourceServlet
 
 import scala.collection.immutable
@@ -41,7 +44,9 @@ import scala.concurrent.ExecutionContext
 /**
   * Provides the glue between guice and the core modules.
   */
-class CoreGuiceModule extends AbstractModule {
+class CoreGuiceModule(config: Config) extends AbstractModule {
+  @Provides @Singleton
+  def provideConfig(): Config = config
 
   // Export classes used outside of core to guice
   @Provides @Singleton
@@ -57,11 +62,7 @@ class CoreGuiceModule extends AbstractModule {
   def taskKillService(coreModule: CoreModule): KillService = coreModule.taskTerminationModule.taskKillService
 
   @Provides @Singleton
-  def taskCreationHandler(coreModule: CoreModule): InstanceCreationHandler =
-    coreModule.taskTrackerModule.instanceCreationHandler
-
-  @Provides @Singleton
-  def stateOpProcessor(coreModule: CoreModule): TaskStateOpProcessor = coreModule.taskTrackerModule.stateOpProcessor
+  def stateOpProcessor(coreModule: CoreModule): InstanceStateOpProcessor = coreModule.taskTrackerModule.stateOpProcessor
 
   @Provides @Singleton
   @SuppressWarnings(Array("UnusedMethodParameter"))
@@ -69,18 +70,12 @@ class CoreGuiceModule extends AbstractModule {
     leadershipModule: LeadershipModule,
     // makeSureToInitializeThisBeforeCreatingCoordinator
     prerequisite1: TaskStatusUpdateProcessor,
-    prerequisite2: LaunchQueue): LeadershipCoordinator =
+    prerequisite2: LaunchQueue,
+    prerequisite3: DeploymentManager): LeadershipCoordinator =
     leadershipModule.coordinator()
 
   @Provides @Singleton
   def offerProcessor(coreModule: CoreModule): OfferProcessor = coreModule.launcherModule.offerProcessor
-
-  @Provides @Singleton
-  def taskStatusEmitter(coreModule: CoreModule): TaskStatusEmitter = coreModule.taskBusModule.taskStatusEmitter
-
-  @Provides @Singleton
-  def taskStatusObservable(coreModule: CoreModule): TaskChangeObservables =
-    coreModule.taskBusModule.taskStatusObservables
 
   @Provides @Singleton
   def taskJobsModule(coreModule: CoreModule): TaskJobsModule = coreModule.taskJobsModule
@@ -119,6 +114,12 @@ class CoreGuiceModule extends AbstractModule {
 
   @Provides
   @Singleton
+  def providePersistenceStore(coreModule: CoreModule): PersistenceStore[_, _, _] = {
+    coreModule.storageModule.persistenceStore
+  }
+
+  @Provides
+  @Singleton
   def provideLeadershipInitializers(coreModule: CoreModule): immutable.Seq[PrePostDriverCallback] = {
     coreModule.storageModule.leadershipInitializers
   }
@@ -138,11 +139,18 @@ class CoreGuiceModule extends AbstractModule {
     coreModule.storageModule.groupRepository
 
   @Provides @Singleton
-  def framworkIdRepository(coreModule: CoreModule): FrameworkIdRepository =
+  def frameworkIdRepository(coreModule: CoreModule): FrameworkIdRepository =
     coreModule.storageModule.frameworkIdRepository
 
   @Provides @Singleton
+  def runtimeConfigurationRepository(coreModule: CoreModule): RuntimeConfigurationRepository =
+    coreModule.storageModule.runtimeConfigurationRepository
+
+  @Provides @Singleton
   def groupManager(coreModule: CoreModule): GroupManager = coreModule.groupManagerModule.groupManager
+
+  @Provides @Singleton
+  def groupService(coreModule: CoreModule): GroupApiService = coreModule.groupManagerModule.groupService
 
   @Provides @Singleton
   def podSystem(coreModule: CoreModule): PodManager = coreModule.podModule.podManager
@@ -152,7 +160,6 @@ class CoreGuiceModule extends AbstractModule {
     notifyHealthCheckManagerStepImpl: NotifyHealthCheckManagerStepImpl,
     notifyRateLimiterStepImpl: NotifyRateLimiterStepImpl,
     notifyLaunchQueueStepImpl: NotifyLaunchQueueStepImpl,
-    taskStatusEmitterPublishImpl: TaskStatusEmitterPublishStepImpl,
     postToEventStreamStepImpl: PostToEventStreamStepImpl,
     scaleAppUpdateStepImpl: ScaleAppUpdateStepImpl): Seq[InstanceChangeHandler] = {
 
@@ -172,7 +179,6 @@ class CoreGuiceModule extends AbstractModule {
       ContinueOnErrorStep(notifyHealthCheckManagerStepImpl),
       ContinueOnErrorStep(notifyRateLimiterStepImpl),
       ContinueOnErrorStep(notifyLaunchQueueStepImpl),
-      ContinueOnErrorStep(taskStatusEmitterPublishImpl),
       ContinueOnErrorStep(postToEventStreamStepImpl),
       ContinueOnErrorStep(scaleAppUpdateStepImpl)
     )
@@ -184,7 +190,7 @@ class CoreGuiceModule extends AbstractModule {
   }
 
   override def configure(): Unit = {
-    bind(classOf[Clock]).toInstance(Clock())
+    bind(classOf[Clock]).toInstance(Clock.systemUTC())
     bind(classOf[CoreModule]).to(classOf[CoreModuleImpl]).in(Scopes.SINGLETON)
 
     // FIXME: Because of cycle breaking in guice, it is hard to not wire it with Guice directly
@@ -205,12 +211,7 @@ class CoreGuiceModule extends AbstractModule {
 
   @Provides
   @Singleton
-  def provideExecutionContext: ExecutionContext = ExecutionContext.global
-
-  @Provides @Singleton
-  def httpCallbackSubscriptionService(coreModule: CoreModule): HttpCallbackSubscriptionService = {
-    coreModule.eventModule.httpCallbackSubscriptionService
-  }
+  def provideExecutionContext: ExecutionContext = ExecutionContexts.global
 
   @Provides @Singleton @Named(ModuleNames.HISTORY_ACTOR_PROPS)
   def historyActor(coreModule: CoreModule): Props = coreModule.historyModule.historyActorProps
@@ -227,4 +228,18 @@ class CoreGuiceModule extends AbstractModule {
 
   @Provides @Singleton
   def healthCheckManager(coreModule: CoreModule): HealthCheckManager = coreModule.healthModule.healthCheckManager
+
+  @Provides
+  @Singleton
+  def deploymentManager(coreModule: CoreModule): DeploymentManager = coreModule.deploymentModule.deploymentManager
+
+  @Provides
+  @Singleton
+  def schedulerActions(coreModule: CoreModule): SchedulerActions = coreModule.schedulerActions
+
+  @Provides @Singleton
+  def marathonScheduler(coreModule: CoreModule): MarathonScheduler = coreModule.marathonScheduler
+
+  @Provides @Singleton
+  def scheduler(coreModule: CoreModule): Scheduler = coreModule.mesosHeartbeatMonitor
 }

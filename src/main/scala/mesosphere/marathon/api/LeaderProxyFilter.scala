@@ -9,17 +9,18 @@ import javax.servlet._
 import javax.servlet.http.{ HttpServletRequest, HttpServletResponse }
 
 import akka.Done
+import akka.http.scaladsl.model.StatusCodes._
+import com.google.common.io.Closeables
 import com.google.inject.Inject
+import com.typesafe.scalalogging.StrictLogging
 import mesosphere.chaos.http.HttpConf
 import mesosphere.marathon.core.election.ElectionService
 import mesosphere.marathon.io.IO
 import mesosphere.marathon.stream.Implicits._
-import org.apache.http.HttpStatus
-import org.slf4j.LoggerFactory
 
 import scala.annotation.tailrec
-import scala.util.{ Failure, Success, Try }
 import scala.util.control.NonFatal
+import scala.util.{ Failure, Success, Try }
 
 /**
   * Servlet filter that proxies requests to the leader if we are not the leader.
@@ -28,7 +29,7 @@ class LeaderProxyFilter @Inject() (
     httpConf: HttpConf,
     electionService: ElectionService,
     @Named(ModuleNames.HOST_PORT) myHostPort: String,
-    forwarder: RequestForwarder) extends Filter {
+    forwarder: RequestForwarder) extends Filter with StrictLogging {
 
   import LeaderProxyFilter._
 
@@ -69,16 +70,16 @@ class LeaderProxyFilter @Inject() (
         val currentLeaderData = electionService.leaderHostPort
 
         if (weAreLeader || currentLeaderData.exists(_ != myHostPort)) {
-          log.info("Leadership info is consistent again!")
+          logger.info("Leadership info is consistent again!")
           result = true
           retries = 0
         } else if (retries >= 0) {
           // as long as we are not flagged as elected yet, the leadership transition is still
           // taking place and we hold back any requests.
-          log.info(s"Waiting for consistent leadership state. Are we leader?: $weAreLeader, leader: $currentLeaderData")
+          logger.info(s"Waiting for consistent leadership state. Are we leader?: $weAreLeader, leader: $currentLeaderData")
           sleep()
         } else {
-          log.error(
+          logger.error(
             s"inconsistent leadership state, refusing request for ourselves at $myHostPort. " +
               s"Are we leader?: $weAreLeader, leader: $currentLeaderData")
         }
@@ -97,13 +98,13 @@ class LeaderProxyFilter @Inject() (
           response.addHeader(LeaderProxyFilter.HEADER_MARATHON_LEADER, buildUrl(myHostPort).toString)
           chain.doFilter(request, response)
         } else if (leaderDataOpt.forall(_ == myHostPort)) { // either not leader or ourselves
-          log.info(
+          logger.info(
             "Do not proxy to myself. Waiting for consistent leadership state. " +
               s"Are we leader?: false, leader: $leaderDataOpt")
           if (waitForConsistentLeadership()) {
             doFilter(rawRequest, rawResponse, chain)
           } else {
-            response.sendError(HttpStatus.SC_SERVICE_UNAVAILABLE, ERROR_STATUS_NO_CURRENT_LEADER)
+            response.sendError(ServiceUnavailable.intValue, ERROR_STATUS_NO_CURRENT_LEADER)
           }
         } else {
           try {
@@ -127,8 +128,6 @@ class LeaderProxyFilter @Inject() (
 }
 
 object LeaderProxyFilter {
-  private val log = LoggerFactory.getLogger(getClass.getName)
-
   val HEADER_MARATHON_LEADER: String = "X-Marathon-Leader"
   val ERROR_STATUS_NO_CURRENT_LEADER: String = "Could not determine the current leader"
 }
@@ -141,10 +140,10 @@ trait RequestForwarder {
 }
 
 class JavaUrlConnectionRequestForwarder @Inject() (
-  @Named(JavaUrlConnectionRequestForwarder.NAMED_LEADER_PROXY_SSL_CONTEXT) sslContext: SSLContext,
-  leaderProxyConf: LeaderProxyConf,
-  @Named(ModuleNames.HOST_PORT) myHostPort: String)
-    extends RequestForwarder {
+    @Named(JavaUrlConnectionRequestForwarder.NAMED_LEADER_PROXY_SSL_CONTEXT) sslContext: SSLContext,
+    leaderProxyConf: LeaderProxyConf,
+    @Named(ModuleNames.HOST_PORT) myHostPort: String)
+  extends RequestForwarder with StrictLogging {
 
   import JavaUrlConnectionRequestForwarder._
 
@@ -200,7 +199,7 @@ class JavaUrlConnectionRequestForwarder @Inject() (
         headerValues <- Option(request.getHeaders(name))
         headerValue <- headerValues.seq
       } {
-        log.debug(s"addRequestProperty $name: $headerValue")
+        logger.debug(s"addRequestProperty $name: $headerValue")
         leaderConnection.addRequestProperty(name, headerValue)
       }
 
@@ -227,10 +226,11 @@ class JavaUrlConnectionRequestForwarder @Inject() (
       }
     }
 
-    def copyRequestToConnection(leaderConnection: HttpURLConnection, request: HttpServletRequest): Unit = {
+    def copyRequestToConnection(leaderConnection: HttpURLConnection, request: HttpServletRequest): Try[Done] = Try {
       leaderConnection.setRequestMethod(request.getMethod)
       copyRequestHeadersToConnection(leaderConnection, request)
       copyRequestBodyToConnection(leaderConnection, request)
+      Done
     }
 
     def cloneResponseStatusAndHeader(remote: HttpURLConnection, response: HttpServletResponse): Try[Done] = Try {
@@ -260,63 +260,67 @@ class JavaUrlConnectionRequestForwarder @Inject() (
           IO.using(remote.getInputStream) { connectionInput => copy(connectionInput, output) }
         } catch {
           case e: IOException =>
-            log.debug("got exception response, this is maybe an error code", e)
+            logger.debug("got exception response, this is maybe an error code", e)
             IO.using(remote.getErrorStream) { connectionError => copy(connectionError, output) }
         }
       }
     }
 
-    log.info(s"Proxying request to ${request.getMethod} $url from $myHostPort")
+    logger.info(s"Proxying request to ${request.getMethod} $url from $myHostPort")
 
     try {
       if (hasProxyLoop) {
-        log.error("Prevent proxy cycle, rejecting request")
-        response.sendError(HttpStatus.SC_BAD_GATEWAY, ERROR_STATUS_LOOP)
+        logger.error("Prevent proxy cycle, rejecting request")
+        response.sendError(BadGateway.intValue, ERROR_STATUS_LOOP)
       } else {
         val leaderConnection: HttpURLConnection = createAndConfigureConnection(url)
         try {
-          copyRequestToConnection(leaderConnection, request)
-          copyConnectionResponse(
-            response
-          )(
+          copyRequestToConnection(leaderConnection, request) match {
+            case Failure(ex: ConnectException) =>
+              logger.error(ERROR_STATUS_CONNECTION_REFUSED, ex)
+              response.sendError(BadGateway.intValue, ERROR_STATUS_CONNECTION_REFUSED)
+            case Failure(ex: SocketTimeoutException) =>
+              logger.error(ERROR_STATUS_GATEWAY_TIMEOUT, ex)
+              response.sendError(GatewayTimeout.intValue, ERROR_STATUS_GATEWAY_TIMEOUT)
+            case Failure(ex) =>
+              logger.error(ERROR_STATUS_BAD_CONNECTION, ex)
+              response.sendError(InternalServerError.intValue)
+            case Success(_) => // ignore
+          }
+          copyConnectionResponse(response)(
             () => cloneResponseStatusAndHeader(leaderConnection, response),
             () => cloneResponseEntity(leaderConnection, response)
           )
-        } catch {
-          case connException: ConnectException =>
-            response.sendError(HttpStatus.SC_BAD_GATEWAY, ERROR_STATUS_CONNECTION_REFUSED)
         } finally {
-          Try(leaderConnection.getInputStream.close())
-          Try(leaderConnection.getErrorStream.close())
+          Closeables.closeQuietly(leaderConnection.getInputStream())
+          Closeables.closeQuietly(leaderConnection.getErrorStream())
         }
       }
     } finally {
-      Try(request.getInputStream.close())
-      Try(response.getOutputStream.close())
+      Closeables.closeQuietly(request.getInputStream())
+      Closeables.close(response.getOutputStream(), true)
     }
 
   }
 
   def copy(nullableIn: InputStream, nullableOut: OutputStream): Unit = {
     try {
-      for {
-        in <- Option(nullableIn)
-        out <- Option(nullableOut)
-      } IO.transfer(in, out, close = false)
+      // Note: This method blocks. That means it never returns if the request is for an SSE stream.
+      IO.transfer(Option(nullableIn), Option(nullableOut))
     } catch {
       case e: UnknownServiceException =>
-        log.warn("unexpected unknown service exception", e)
+        logger.warn("unexpected unknown service exception", e)
     }
   }
 }
 
-object JavaUrlConnectionRequestForwarder {
-  private val log = LoggerFactory.getLogger(getClass)
+object JavaUrlConnectionRequestForwarder extends StrictLogging {
 
   /** Header for proxy loop detection. Simply "Via" is ignored by the URL connection.*/
   val HEADER_VIA: String = "X-Marathon-Via"
   val ERROR_STATUS_LOOP: String = "Detected proxying loop."
   val ERROR_STATUS_CONNECTION_REFUSED: String = "Connection to leader refused."
+  val ERROR_STATUS_GATEWAY_TIMEOUT: String = "Connection to leader timed out."
   val ERROR_STATUS_BAD_CONNECTION: String = "Failed to successfully establish a connection to the leader."
 
   val HEADER_FORWARDED_FOR: String = "X-Forwarded-For"
@@ -326,11 +330,13 @@ object JavaUrlConnectionRequestForwarder {
     forwardHeaders: () => Try[Done], forwardEntity: () => Unit): Unit = {
 
     forwardHeaders() match {
-      case Failure(e) =>
+      case Failure(ex: SocketTimeoutException) =>
+        logger.error(ERROR_STATUS_GATEWAY_TIMEOUT, ex)
+        response.sendError(GatewayTimeout.intValue, ERROR_STATUS_GATEWAY_TIMEOUT)
+      case Failure(ex) =>
         // early detection of proxy failure, before we commit the status code to the response stream
-        log.warn("failed to proxy response headers from leader", e)
-        response.sendError(HttpStatus.SC_BAD_GATEWAY, ERROR_STATUS_BAD_CONNECTION)
-
+        logger.warn("failed to proxy response headers from leader", ex)
+        response.sendError(BadGateway.intValue, ERROR_STATUS_BAD_CONNECTION)
       case Success(_) =>
         forwardEntity()
     }

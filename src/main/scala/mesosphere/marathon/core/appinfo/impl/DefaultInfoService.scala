@@ -18,7 +18,7 @@ import scala.concurrent.Future
 private[appinfo] class DefaultInfoService(
     groupManager: GroupManager,
     newBaseData: () => AppInfoBaseData) extends AppInfoService with GroupInfoService with PodStatusService {
-  import scala.concurrent.ExecutionContext.Implicits.global
+  import mesosphere.marathon.core.async.ExecutionContexts.global
 
   private[this] val log = LoggerFactory.getLogger(getClass)
 
@@ -26,7 +26,7 @@ private[appinfo] class DefaultInfoService(
   override def selectPodStatus(id: PathId, selector: PodSelector): Future[Option[PodStatus]] =
     async { // linter:ignore UnnecessaryElseBranch
       log.debug(s"query for pod $id")
-      val maybePod = await(groupManager.pod(id))
+      val maybePod = groupManager.pod(id)
       maybePod.filter(selector.matches) match {
         case Some(pod) => Some(await(newBaseData().podStatus(pod)))
         case None => Option.empty[PodStatus]
@@ -35,7 +35,7 @@ private[appinfo] class DefaultInfoService(
 
   override def selectApp(id: PathId, selector: AppSelector, embed: Set[AppInfo.Embed]): Future[Option[AppInfo]] = {
     log.debug(s"queryForAppId $id")
-    groupManager.app(id).flatMap {
+    groupManager.app(id) match {
       case Some(app) if selector.matches(app) => newBaseData().appInfoFuture(app, embed).map(Some(_))
       case None => Future.successful(None)
     }
@@ -45,7 +45,7 @@ private[appinfo] class DefaultInfoService(
   override def selectAppsBy(selector: AppSelector, embed: Set[AppInfo.Embed]): Future[Seq[AppInfo]] =
     async { // linter:ignore UnnecessaryElseBranch
       log.debug("queryAll")
-      val rootGroup = await(groupManager.rootGroup())
+      val rootGroup = groupManager.rootGroup()
       val selectedApps: IndexedSeq[AppDefinition] = rootGroup.transitiveApps.filterAs(selector.matches)(collection.breakOut)
       val infos = await(resolveAppInfos(selectedApps, embed))
       infos
@@ -57,7 +57,7 @@ private[appinfo] class DefaultInfoService(
 
     async { // linter:ignore UnnecessaryElseBranch
       log.debug(s"queryAllInGroup $groupId")
-      val maybeGroup: Option[Group] = await(groupManager.group(groupId))
+      val maybeGroup: Option[Group] = groupManager.group(groupId)
       val maybeApps: Option[IndexedSeq[AppDefinition]] =
         maybeGroup.map(_.transitiveApps.filterAs(selector.matches)(collection.breakOut))
       maybeApps match {
@@ -68,7 +68,7 @@ private[appinfo] class DefaultInfoService(
 
   override def selectGroup(groupId: PathId, selectors: GroupInfoService.Selectors,
     appEmbed: Set[Embed], groupEmbed: Set[GroupInfo.Embed]): Future[Option[GroupInfo]] = {
-    groupManager.group(groupId).flatMap {
+    groupManager.group(groupId) match {
       case Some(group) => queryForGroup(group, selectors, appEmbed, groupEmbed)
       case None => Future.successful(None)
     }
@@ -82,6 +82,8 @@ private[appinfo] class DefaultInfoService(
     }
   }
 
+  private case class LazyCell[T](evalution: () => T) { lazy val value = evalution() }
+
   @SuppressWarnings(Array("all")) // async/await
   private[this] def queryForGroup(
     group: Group,
@@ -90,7 +92,7 @@ private[appinfo] class DefaultInfoService(
     groupEmbed: Set[GroupInfo.Embed]): Future[Option[GroupInfo]] =
 
     async { // linter:ignore UnnecessaryElseBranch
-      lazy val cachedBaseData = newBaseData()
+      val cachedBaseData = LazyCell(() => newBaseData()) // Work around strange async/eval compile bug in Scala 2.12
 
       val groupEmbedApps = groupEmbed(GroupInfo.Embed.Apps)
       val groupEmbedPods = groupEmbed(GroupInfo.Embed.Pods)
@@ -100,7 +102,7 @@ private[appinfo] class DefaultInfoService(
         if (groupEmbedApps) {
           val filteredApps: IndexedSeq[AppDefinition] =
             group.transitiveApps.filterAs(selectors.appSelector.matches)(collection.breakOut)
-          await(resolveAppInfos(filteredApps, appEmbed, cachedBaseData)).map {
+          await(resolveAppInfos(filteredApps, appEmbed, cachedBaseData.value)).map {
             info => info.app.id -> info
           }(collection.breakOut)
         } else {
@@ -110,8 +112,8 @@ private[appinfo] class DefaultInfoService(
       val statusById: Map[PathId, PodStatus] =
         if (groupEmbedPods) {
           val filteredPods: IndexedSeq[PodDefinition] =
-            group.transitivePodsById.values.filterAs(selectors.podSelector.matches)(collection.breakOut)
-          await(resolvePodInfos(filteredPods, cachedBaseData)).map { status =>
+            group.transitivePods.filterAs(selectors.podSelector.matches)(collection.breakOut)
+          await(resolvePodInfos(filteredPods, cachedBaseData.value)).map { status =>
             PathId(status.id) -> status
           }(collection.breakOut)
         } else {

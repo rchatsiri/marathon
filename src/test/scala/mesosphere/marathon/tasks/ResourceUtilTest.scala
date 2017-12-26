@@ -97,6 +97,13 @@ class ResourceUtilTest extends UnitTest {
       ) should be(Seq(resourceWithReservation))
     }
 
+    "resource consumption fully consumes mount disks" in {
+      ResourceUtil.consumeScalarResource(
+        MTH.scalarResource("disk", 1024.0,
+          disk = Some(MTH.mountDisk("/mnt/disk1"))),
+        32.0) shouldBe (None)
+    }
+
     "resource consumption considers reservation labels" in {
       val reservationInfo1 = ReservationInfo.newBuilder().setPrincipal("principal").build()
       val labels = Protos.Labels.newBuilder().addLabels(Protos.Label.newBuilder().setKey("key").setValue("value"))
@@ -218,7 +225,7 @@ class ResourceUtilTest extends UnitTest {
       .newBuilder()
       .setName(name)
       .setType(Value.Type.SET)
-      .setSet(Value.Set.newBuilder().addAllItem(labels))
+      .setSet(Value.Set.newBuilder().addAllItem(labels.asJava))
       .build()
   }
 
@@ -246,7 +253,7 @@ class ResourceUtilTest extends UnitTest {
       .newBuilder()
       .setName(name)
       .setType(Value.Type.RANGES)
-      .setRanges(Value.Ranges.newBuilder().addAllRange(ranges.map(toRange)))
+      .setRanges(Value.Ranges.newBuilder().addAllRange(ranges.map(toRange).asJava))
       .build()
   }
 

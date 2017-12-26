@@ -2,22 +2,21 @@ package mesosphere.marathon
 package api.v2
 
 import mesosphere.UnitTest
-import mesosphere.marathon.api.v2.json.Formats._
 import mesosphere.marathon.api.{ JsonTestHelper, TaskKiller, TestAuthFixture }
-import mesosphere.marathon.core.appinfo.EnrichedTask
+import mesosphere.marathon.core.async.ExecutionContexts.global
 import mesosphere.marathon.core.group.GroupManager
 import mesosphere.marathon.core.health.HealthCheckManager
 import mesosphere.marathon.core.instance.{ Instance, TestInstanceBuilder }
 import mesosphere.marathon.core.task.Task
-import mesosphere.marathon.core.task.tracker.{ InstanceTracker, TaskStateOpProcessor }
+import mesosphere.marathon.core.task.termination.KillService
+import mesosphere.marathon.core.task.tracker.{ InstanceTracker, InstanceStateOpProcessor }
 import mesosphere.marathon.state.PathId._
 import mesosphere.marathon.state.{ PathId, _ }
-import mesosphere.marathon.test.GroupCreation
+import mesosphere.marathon.test.{ GroupCreation, SettableClock }
 import org.mockito.Matchers
 import org.mockito.Mockito._
 import play.api.libs.json.Json
 
-import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.Future
 import scala.concurrent.duration._
 
@@ -27,7 +26,7 @@ class SpecInstancesResourceTest extends UnitTest with GroupCreation {
       auth: TestAuthFixture = new TestAuthFixture,
       service: MarathonSchedulerService = mock[MarathonSchedulerService],
       taskTracker: InstanceTracker = mock[InstanceTracker],
-      stateOpProcessor: TaskStateOpProcessor = mock[TaskStateOpProcessor],
+      stateOpProcessor: InstanceStateOpProcessor = mock[InstanceStateOpProcessor],
       taskKiller: TaskKiller = mock[TaskKiller],
       healthCheckManager: HealthCheckManager = mock[HealthCheckManager],
       config: MarathonConf = mock[MarathonConf],
@@ -50,12 +49,14 @@ class SpecInstancesResourceTest extends UnitTest with GroupCreation {
       auth: TestAuthFixture = new TestAuthFixture,
       service: MarathonSchedulerService = mock[MarathonSchedulerService],
       taskTracker: InstanceTracker = mock[InstanceTracker],
-      stateOpProcessor: TaskStateOpProcessor = mock[TaskStateOpProcessor],
+      stateOpProcessor: InstanceStateOpProcessor = mock[InstanceStateOpProcessor],
       healthCheckManager: HealthCheckManager = mock[HealthCheckManager],
       config: MarathonConf = mock[MarathonConf],
       groupManager: GroupManager = mock[GroupManager]) {
     val identity = auth.identity
-    val taskKiller = new TaskKiller(taskTracker, stateOpProcessor, groupManager, service, config, auth.auth, auth.auth)
+    val killService = mock[KillService]
+    val taskKiller = new TaskKiller(
+      taskTracker, stateOpProcessor, groupManager, service, config, auth.auth, auth.auth, killService)
     val appsTaskResource = new AppTasksResource(
       taskTracker,
       taskKiller,
@@ -71,19 +72,56 @@ class SpecInstancesResourceTest extends UnitTest with GroupCreation {
 
   "SpecInstancesResource" should {
     "deleteMany" in new Fixture {
-      val appId = "/my/app"
+      val appId = "/my/app".toRootPath
       val host = "host"
-      val toKill = Seq(TestInstanceBuilder.newBuilder(PathId(appId)).addTaskStaged().getInstance())
+      val clock = new SettableClock()
+      val instance1 = TestInstanceBuilder.newBuilderWithLaunchedTask(appId, now = clock.now(), version = clock.now()).addTaskStaged().getInstance()
+      val instance2 = TestInstanceBuilder.newBuilderWithLaunchedTask(appId, now = clock.now(), version = clock.now()).addTaskStaged().getInstance()
+      val toKill = Seq(instance1, instance2)
 
       config.zkTimeoutDuration returns 5.seconds
       taskKiller.kill(any, any, any)(any) returns Future.successful(toKill)
-      groupManager.runSpec(appId.toRootPath) returns Future.successful(Some(AppDefinition(appId.toRootPath)))
+      groupManager.runSpec(appId) returns Some(AppDefinition(appId))
+      healthCheckManager.statuses(appId) returns Future.successful(collection.immutable.Map.empty)
 
-      val response = appsTaskResource.deleteMany(appId, host, scale = false, force = false, wipe = false, auth.request)
+      val response = appsTaskResource.deleteMany(appId.toString, host, scale = false, force = false, wipe = false, auth.request)
       response.getStatus shouldEqual 200
+
+      val expected =
+        s"""
+           |{ "tasks": [
+           |  {
+           |    "appId" : "/my/app",
+           |    "healthCheckResults" : [ ],
+           |    "host" : "host.some",
+           |    "id" : "${instance1.appTask.taskId.idString}",
+           |    "ipAddresses" : [ ],
+           |    "ports" : [ ],
+           |    "servicePorts" : [ ],
+           |    "slaveId" : "agent-1",
+           |    "state" : "TASK_STAGING",
+           |    "stagedAt" : "2015-04-09T12:30:00.000Z",
+           |    "version" : "2015-04-09T12:30:00.000Z",
+           |    "localVolumes" : [ ]
+           |  }, {
+           |    "appId" : "/my/app",
+           |    "healthCheckResults" : [ ],
+           |    "host" : "host.some",
+           |    "id" : "${instance2.appTask.taskId.idString}",
+           |    "ipAddresses" : [ ],
+           |    "ports" : [ ],
+           |    "servicePorts" : [ ],
+           |    "slaveId" : "agent-1",
+           |    "state" : "TASK_STAGING",
+           |    "stagedAt" : "2015-04-09T12:30:00.000Z",
+           |    "version" : "2015-04-09T12:30:00.000Z",
+           |    "localVolumes" : [ ]
+           |  } ]
+           |}
+        """.stripMargin
       JsonTestHelper
         .assertThatJsonString(response.getEntity.asInstanceOf[String])
-        .correspondsToJsonOf(Json.obj("tasks" -> toKill))
+        .correspondsToJsonString(expected)
     }
 
     "deleteMany with scale and wipe fails" in new Fixture {
@@ -99,6 +137,7 @@ class SpecInstancesResourceTest extends UnitTest with GroupCreation {
     "deleteMany with wipe delegates to taskKiller with wipe value" in new Fixture {
       val appId = "/my/app"
       val host = "host"
+      healthCheckManager.statuses(appId.toRootPath) returns Future.successful(collection.immutable.Map.empty)
       taskKiller.kill(any, any, any)(any) returns Future.successful(Seq.empty[Instance])
 
       val response = appsTaskResource.deleteMany(appId, host, scale = false, force = false, wipe = true, auth.request)
@@ -107,23 +146,44 @@ class SpecInstancesResourceTest extends UnitTest with GroupCreation {
     }
 
     "deleteOne" in new Fixture {
+      val clock = new SettableClock()
       val appId = PathId("/my/app")
-      val task1 = TestInstanceBuilder.newBuilderWithLaunchedTask(appId).getInstance()
-      val task2 = TestInstanceBuilder.newBuilderWithLaunchedTask(appId).getInstance()
-      val toKill = Seq(task1)
+      val instance1 = TestInstanceBuilder.newBuilderWithLaunchedTask(appId, now = clock.now(), version = clock.now()).getInstance()
+      val instance2 = TestInstanceBuilder.newBuilderWithLaunchedTask(appId, now = clock.now(), version = clock.now()).getInstance()
+      val toKill = Seq(instance1)
 
       config.zkTimeoutDuration returns 5.seconds
-      taskTracker.specInstances(appId) returns Future.successful(Seq(task1, task2))
+      taskTracker.specInstances(appId) returns Future.successful(Seq(instance1, instance2))
       taskKiller.kill(any, any, any)(any) returns Future.successful(toKill)
-      groupManager.app(appId) returns Future.successful(Some(AppDefinition(appId)))
+      groupManager.app(appId) returns Some(AppDefinition(appId))
+      healthCheckManager.statuses(appId) returns Future.successful(collection.immutable.Map.empty)
 
       val response = appsTaskResource.deleteOne(
-        appId.toString, task1.instanceId.idString, scale = false, force = false, wipe = false, auth.request
+        appId.toString, instance1.instanceId.idString, scale = false, force = false, wipe = false, auth.request
       )
       response.getStatus shouldEqual 200
+
+      val expected =
+        s"""
+          |{ "task":
+          |  {
+          |    "appId" : "/my/app",
+          |    "healthCheckResults" : [ ],
+          |    "host" : "host.some",
+          |    "id" : "${instance1.appTask.taskId.idString}",
+          |    "ipAddresses" : [ ],
+          |    "ports" : [ ],
+          |    "servicePorts" : [ ],
+          |    "slaveId" : "agent-1",
+          |    "state" : "TASK_STAGING",
+          |    "stagedAt" : "2015-04-09T12:30:00.000Z",
+          |    "version" : "2015-04-09T12:30:00.000Z",
+          |    "localVolumes" : [ ]
+          |  }
+          |}""".stripMargin
       JsonTestHelper
         .assertThatJsonString(response.getEntity.asInstanceOf[String])
-        .correspondsToJsonOf(Json.obj("task" -> toKill.head))
+        .correspondsToJsonString(expected)
       verify(taskKiller).kill(equalTo(appId), any, any)(any)
       verifyNoMoreInteractions(taskKiller)
     }
@@ -132,6 +192,8 @@ class SpecInstancesResourceTest extends UnitTest with GroupCreation {
       val appId = PathId("/my/app")
       val id = Task.Id.forRunSpec(appId)
 
+      healthCheckManager.statuses(appId) returns Future.successful(collection.immutable.Map.empty)
+
       val exception = intercept[BadRequestException] {
         appsTaskResource.deleteOne(appId.toString, id.toString, scale = true, force = false, wipe = true, auth.request)
       }
@@ -139,61 +201,107 @@ class SpecInstancesResourceTest extends UnitTest with GroupCreation {
     }
 
     "deleteOne with wipe delegates to taskKiller with wipe value" in new Fixture {
+      val clock = new SettableClock()
       val appId = PathId("/my/app")
-      val instance1 = TestInstanceBuilder.newBuilderWithLaunchedTask(appId).getInstance()
-      val instance2 = TestInstanceBuilder.newBuilderWithLaunchedTask(appId).getInstance()
+      val instance1 = TestInstanceBuilder.newBuilderWithLaunchedTask(appId, now = clock.now(), version = clock.now()).getInstance()
+      val instance2 = TestInstanceBuilder.newBuilderWithLaunchedTask(appId, now = clock.now(), version = clock.now()).getInstance()
       val toKill = Seq(instance1)
 
       config.zkTimeoutDuration returns 5.seconds
       taskTracker.specInstances(appId) returns Future.successful(Seq(instance1, instance2))
       taskKiller.kill(any, any, any)(any) returns Future.successful(toKill)
-      groupManager.app(appId) returns Future.successful(Some(AppDefinition(appId)))
+      groupManager.app(appId) returns Some(AppDefinition(appId))
+      healthCheckManager.statuses(appId) returns Future.successful(collection.immutable.Map.empty)
 
       val response = appsTaskResource.deleteOne(
         appId.toString, instance1.instanceId.idString, scale = false, force = false, wipe = true, auth.request
       )
       response.getStatus shouldEqual 200
+
+      val expected =
+        s"""
+           |{ "task":
+           |  {
+           |    "appId" : "/my/app",
+           |    "healthCheckResults" : [ ],
+           |    "host" : "host.some",
+           |    "id" : "${instance1.appTask.taskId.idString}",
+           |    "ipAddresses" : [ ],
+           |    "ports" : [ ],
+           |    "servicePorts" : [ ],
+           |    "slaveId" : "agent-1",
+           |    "state" : "TASK_STAGING",
+           |    "stagedAt" : "2015-04-09T12:30:00.000Z",
+           |    "version" : "2015-04-09T12:30:00.000Z",
+           |    "localVolumes" : [ ]
+           |  }
+           |}""".stripMargin
       JsonTestHelper
         .assertThatJsonString(response.getEntity.asInstanceOf[String])
-        .correspondsToJsonOf(Json.obj("task" -> toKill.head))
+        .correspondsToJsonString(expected)
       verify(taskKiller).kill(equalTo(appId), any, org.mockito.Matchers.eq(true))(any)
       verifyNoMoreInteractions(taskKiller)
     }
 
     "get tasks" in new Fixture {
+      val clock = new SettableClock()
+
       val appId = PathId("/my/app")
 
-      val instance1 = TestInstanceBuilder.newBuilderWithLaunchedTask(appId).getInstance()
-      val instance2 = TestInstanceBuilder.newBuilderWithLaunchedTask(appId).getInstance()
+      val instance1 = TestInstanceBuilder.newBuilderWithLaunchedTask(appId, clock.now()).getInstance()
+      val instance2 = TestInstanceBuilder.newBuilderWithLaunchedTask(appId, clock.now()).getInstance()
 
       config.zkTimeoutDuration returns 5.seconds
       taskTracker.instancesBySpec returns Future.successful(InstanceTracker.InstancesBySpec.of(InstanceTracker.SpecInstances.forInstances(appId, Seq(instance1, instance2))))
       healthCheckManager.statuses(appId) returns Future.successful(collection.immutable.Map.empty)
-      groupManager.app(appId) returns Future.successful(Some(AppDefinition(appId)))
+      groupManager.app(appId) returns Some(AppDefinition(appId))
 
       val response = appsTaskResource.indexJson("/my/app", auth.request)
       response.getStatus shouldEqual 200
 
-      def toEnrichedTask(instance: Instance): EnrichedTask = {
-        EnrichedTask(
-          appId = appId,
-          task = instance.appTask,
-          agentInfo = instance.agentInfo,
-          healthCheckResults = Seq(),
-          servicePorts = Seq()
-        )
-      }
+      val expected =
+        s"""
+          |{ "tasks": [
+          |  {
+          |    "appId" : "/my/app",
+          |    "healthCheckResults" : [ ],
+          |    "host" : "host.some",
+          |    "id" : "${instance1.appTask.taskId.idString}",
+          |    "ipAddresses" : [ ],
+          |    "ports" : [ ],
+          |    "servicePorts" : [ ],
+          |    "slaveId" : "agent-1",
+          |    "state" : "TASK_STAGING",
+          |    "stagedAt" : "2015-04-09T12:30:00.000Z",
+          |    "version" : "2015-04-09T12:30:00.000Z",
+          |    "localVolumes" : [ ]
+          |  }, {
+          |    "appId" : "/my/app",
+          |    "healthCheckResults" : [ ],
+          |    "host" : "host.some",
+          |    "id" : "${instance2.appTask.taskId.idString}",
+          |    "ipAddresses" : [ ],
+          |    "ports" : [ ],
+          |    "servicePorts" : [ ],
+          |    "slaveId" : "agent-1",
+          |    "state" : "TASK_STAGING",
+          |    "stagedAt" : "2015-04-09T12:30:00.000Z",
+          |    "version" : "2015-04-09T12:30:00.000Z",
+          |    "localVolumes" : [ ]
+          |  } ]
+          |}
+        """.stripMargin
 
       JsonTestHelper
         .assertThatJsonString(response.getEntity.asInstanceOf[String])
-        .correspondsToJsonOf(Json.obj("tasks" -> Seq(instance1, instance2).map(toEnrichedTask)))
+        .correspondsToJsonString(expected)
     }
 
     "access without authentication is denied" in new Fixture {
       Given("An unauthenticated request")
       auth.authenticated = false
       val req = auth.request
-      groupManager.rootGroup() returns Future.successful(createRootGroup())
+      groupManager.rootGroup() returns createRootGroup()
 
       When("the indexJson is fetched")
       val indexJson = appsTaskResource.indexJson("", req)
@@ -224,7 +332,7 @@ class SpecInstancesResourceTest extends UnitTest with GroupCreation {
 
       Given("the app does not exist")
       taskTracker.instancesBySpec returns Future.successful(InstanceTracker.InstancesBySpec.empty)
-      groupManager.app("/app".toRootPath) returns Future.successful(None)
+      groupManager.app("/app".toRootPath) returns None
 
       When("the indexJson is fetched")
       val indexJson = appsTaskResource.indexJson("/app", req)
@@ -240,7 +348,7 @@ class SpecInstancesResourceTest extends UnitTest with GroupCreation {
 
       Given("the app exists")
       taskTracker.instancesBySpec returns Future.successful(InstanceTracker.InstancesBySpec.empty)
-      groupManager.app("/app".toRootPath) returns Future.successful(Some(AppDefinition("/app".toRootPath)))
+      groupManager.app("/app".toRootPath) returns Some(AppDefinition("/app".toRootPath))
 
       When("the indexJson is fetched")
       val indexJson = appsTaskResource.indexJson("/app", req)
@@ -256,7 +364,7 @@ class SpecInstancesResourceTest extends UnitTest with GroupCreation {
 
       Given("the group does not exist")
       taskTracker.instancesBySpec returns Future.successful(InstanceTracker.InstancesBySpec.empty)
-      groupManager.group("/group".toRootPath) returns Future.successful(None)
+      groupManager.group("/group".toRootPath) returns None
 
       When("the indexJson is fetched")
       val indexJson = appsTaskResource.indexJson("/group/*", req)
@@ -272,7 +380,7 @@ class SpecInstancesResourceTest extends UnitTest with GroupCreation {
 
       Given("the group exists")
       val groupPath = "/group".toRootPath
-      groupManager.group(groupPath) returns Future.successful(Some(createGroup(groupPath)))
+      groupManager.group(groupPath) returns Some(createGroup(groupPath))
       taskTracker.instancesBySpec returns Future.successful(InstanceTracker.InstancesBySpec.empty)
 
       When("the indexJson is fetched")
@@ -288,7 +396,7 @@ class SpecInstancesResourceTest extends UnitTest with GroupCreation {
       val req = auth.request
 
       Given("The app exists")
-      groupManager.app("/app".toRootPath) returns Future.successful(Some(AppDefinition("/app".toRootPath)))
+      groupManager.app("/app".toRootPath) returns Some(AppDefinition("/app".toRootPath))
       taskTracker.instancesBySpec returns Future.successful(InstanceTracker.InstancesBySpec.empty)
 
       When("the index as txt is fetched")
@@ -304,7 +412,7 @@ class SpecInstancesResourceTest extends UnitTest with GroupCreation {
       val req = auth.request
 
       Given("The app not exists")
-      groupManager.app("/app".toRootPath) returns Future.successful(None)
+      groupManager.app("/app".toRootPath) returns None
       taskTracker.instancesBySpec returns Future.successful(InstanceTracker.InstancesBySpec.empty)
 
       When("the index as txt is fetched")
@@ -321,7 +429,7 @@ class SpecInstancesResourceTest extends UnitTest with GroupCreation {
       val taskId = Task.Id.forRunSpec(PathId("/app"))
 
       Given("The app exists")
-      groupManager.runSpec("/app".toRootPath) returns Future.successful(Some(AppDefinition("/app".toRootPath)))
+      groupManager.runSpec("/app".toRootPath) returns Some(AppDefinition("/app".toRootPath))
       taskTracker.instancesBySpec returns Future.successful(InstanceTracker.InstancesBySpec.empty)
 
       When("deleteOne is called")
@@ -338,7 +446,7 @@ class SpecInstancesResourceTest extends UnitTest with GroupCreation {
       val taskId = Task.Id.forRunSpec(PathId("/app"))
 
       Given("The app not exists")
-      groupManager.runSpec("/app".toRootPath) returns Future.successful(None)
+      groupManager.runSpec("/app".toRootPath) returns None
       taskTracker.instancesBySpec returns Future.successful(InstanceTracker.InstancesBySpec.empty)
 
       When("deleteOne is called")
@@ -354,7 +462,7 @@ class SpecInstancesResourceTest extends UnitTest with GroupCreation {
       val req = auth.request
 
       Given("The app exists")
-      groupManager.runSpec("/app".toRootPath) returns Future.successful(Some(AppDefinition("/app".toRootPath)))
+      groupManager.runSpec("/app".toRootPath) returns Some(AppDefinition("/app".toRootPath))
       taskTracker.instancesBySpec returns Future.successful(InstanceTracker.InstancesBySpec.empty)
 
       When("deleteMany is called")
@@ -370,7 +478,7 @@ class SpecInstancesResourceTest extends UnitTest with GroupCreation {
       val req = auth.request
 
       Given("The app not exists")
-      groupManager.runSpec("/app".toRootPath) returns Future.successful(None)
+      groupManager.runSpec("/app".toRootPath) returns None
 
       When("deleteMany is called")
       val deleteMany = appsTaskResource.deleteMany("app", "host", false, false, false, req)

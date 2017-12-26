@@ -7,10 +7,10 @@ import javax.servlet.http.HttpServletRequest
 import javax.ws.rs._
 import javax.ws.rs.core.{ Context, MediaType, Response }
 
-import com.codahale.metrics.annotation.Timed
-import mesosphere.marathon.api.v2.json.Formats._
+import mesosphere.marathon.api.EndpointsHelper.ListTasks
 import mesosphere.marathon.api.{ EndpointsHelper, MarathonMediaType, TaskKiller, _ }
 import mesosphere.marathon.core.appinfo.EnrichedTask
+import mesosphere.marathon.core.async.ExecutionContexts
 import mesosphere.marathon.core.condition.Condition
 import mesosphere.marathon.core.group.GroupManager
 import mesosphere.marathon.core.health.{ Health, HealthCheckManager }
@@ -19,13 +19,16 @@ import mesosphere.marathon.core.instance.Instance.Id
 import mesosphere.marathon.core.task.Task
 import mesosphere.marathon.core.task.tracker.InstanceTracker
 import mesosphere.marathon.plugin.auth.{ Authenticator, Authorizer, UpdateRunSpec, ViewRunSpec }
-import mesosphere.marathon.state.{ AppDefinition, PathId }
+import mesosphere.marathon.raml.AnyToRaml
+import mesosphere.marathon.raml.Task._
+import mesosphere.marathon.raml.TaskConversion._
+import mesosphere.marathon.state.PathId
 import mesosphere.marathon.stream.Implicits._
 import org.slf4j.LoggerFactory
 import play.api.libs.json.Json
 
 import scala.async.Async._
-import scala.concurrent.{ ExecutionContext, Future }
+import scala.concurrent.Future
 
 @Path("v2/tasks")
 class TasksResource @Inject() (
@@ -38,11 +41,10 @@ class TasksResource @Inject() (
     val authorizer: Authorizer) extends AuthResource {
 
   val log = LoggerFactory.getLogger(getClass.getName)
-  implicit val ec = ExecutionContext.Implicits.global
+  implicit val ec = ExecutionContexts.global
 
   @GET
   @Produces(Array(MarathonMediaType.PREFERRED_APPLICATION_JSON))
-  @Timed
   @SuppressWarnings(Array("all")) /* async/await */
   def indexJson(
     @QueryParam("status") status: String,
@@ -54,18 +56,14 @@ class TasksResource @Inject() (
     val futureEnrichedTasks = async {
       val instancesBySpec = await(instanceTracker.instancesBySpec)
 
-      val instances = instancesBySpec.instancesMap.values.view.flatMap { appTasks =>
+      val instances: Iterable[(PathId, Instance)] = instancesBySpec.instancesMap.values.flatMap { appTasks =>
         appTasks.instances.map(i => appTasks.specId -> i)
       }
-      val appIds = instancesBySpec.allSpecIdsWithInstances
+      val appIds: Set[PathId] = instancesBySpec.allSpecIdsWithInstances
 
-      //TODO: Move to GroupManager.
-      val appIdsToApps: Map[PathId, Option[AppDefinition]] = await(
-        Future.sequence(
-          appIds.map(appId => groupManager.app(appId).map(appId -> _))
-        )).toMap
+      val appIdsToApps = groupManager.apps(appIds)
 
-      val appToPorts = appIdsToApps.map {
+      val appToPorts: Map[PathId, Seq[Int]] = appIdsToApps.map {
         case (appId, app) => appId -> app.map(_.servicePorts).getOrElse(Nil)
       }
 
@@ -74,43 +72,40 @@ class TasksResource @Inject() (
           healthCheckManager.statuses(appId)
         })).foldLeft(Map[Id, Seq[Health]]())(_ ++ _)
 
-      instances.flatMap {
-        case (appId, instance) =>
-          val app = appIdsToApps(appId)
-          if (isAuthorized(ViewRunSpec, app) && (conditionSet.isEmpty || conditionSet(instance.state.condition))) {
-            instance.tasksMap.values.map { task =>
-              EnrichedTask(
-                appId,
-                task,
-                instance.agentInfo,
-                health.getOrElse(instance.instanceId, Nil),
-                appToPorts.getOrElse(appId, Nil)
-              )
-            }
-          } else {
-            None
-          }
-      }.force
+      val enrichedTasks: Iterable[Iterable[EnrichedTask]] = for {
+        (appId, instance) <- instances
+        app <- appIdsToApps(appId)
+        if (isAuthorized(ViewRunSpec, app) && (conditionSet.isEmpty || conditionSet(instance.state.condition)))
+        tasks = instance.tasksMap.values
+      } yield {
+        tasks.map { task =>
+          EnrichedTask(
+            appId,
+            task,
+            instance.agentInfo,
+            health.getOrElse(instance.instanceId, Nil),
+            appToPorts.getOrElse(appId, Nil)
+          )
+        }
+      }
+      enrichedTasks.flatten
     }
 
     val enrichedTasks: Iterable[EnrichedTask] = result(futureEnrichedTasks)
     ok(jsonObjString(
-      "tasks" -> enrichedTasks
+      "tasks" -> enrichedTasks.toIndexedSeq.toRaml
     ))
   }
 
   @GET
   @Produces(Array(MediaType.TEXT_PLAIN))
-  @Timed
   @SuppressWarnings(Array("all")) /* async/await */
   def indexTxt(@Context req: HttpServletRequest): Response = authenticated(req) { implicit identity =>
     result(async {
       val instancesBySpec = await(instanceTracker.instancesBySpec)
-      val rootGroup = await(groupManager.rootGroup())
+      val rootGroup = groupManager.rootGroup()
       val appsToEndpointString = EndpointsHelper.appsToEndpointString(
-        instancesBySpec,
-        rootGroup.transitiveApps.filterAs(app => isAuthorized(ViewRunSpec, app))(collection.breakOut),
-        "\t"
+        ListTasks(instancesBySpec, rootGroup.transitiveApps.filterAs(app => isAuthorized(ViewRunSpec, app))(collection.breakOut))
       )
       ok(appsToEndpointString)
     })
@@ -119,7 +114,6 @@ class TasksResource @Inject() (
   @POST
   @Produces(Array(MarathonMediaType.PREFERRED_APPLICATION_JSON))
   @Consumes(Array(MediaType.APPLICATION_JSON))
-  @Timed
   @Path("delete")
   @SuppressWarnings(Array("all")) /* async/await */
   def killTasks(
@@ -143,8 +137,7 @@ class TasksResource @Inject() (
     }
 
     def doKillTasks(toKill: Map[PathId, Seq[Instance]]): Future[Response] = async {
-      val appDefinitions = tasksIdToAppId.values.map(appId => groupManager.app(appId))(collection.breakOut)
-      val affectedApps = await(Future.sequence(appDefinitions)).flatten
+      val affectedApps = tasksIdToAppId.values.flatMap(appId => groupManager.app(appId))(collection.breakOut)
       // FIXME (gkleiman): taskKiller.kill a few lines below also checks authorization, but we need to check ALL before
       // starting to kill tasks
       affectedApps.foreach(checkAuthorization(UpdateRunSpec, _))
@@ -155,7 +148,7 @@ class TasksResource @Inject() (
         })).flatten
       ok(jsonObjString("tasks" -> killed.flatMap { instance =>
         instance.tasksMap.valuesIterator.map { task =>
-          EnrichedTask(task.runSpecId, task, instance.agentInfo, Seq.empty)
+          EnrichedTask(task.runSpecId, task, instance.agentInfo, Seq.empty).toRaml
         }
       }))
     }

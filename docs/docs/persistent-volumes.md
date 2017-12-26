@@ -4,11 +4,6 @@ title: Stateful Applications Using Local Persistent Volumes
 
 # Stateful Applications Using Local Persistent Volumes
 
-<div class="alert alert-danger" role="alert">
-  <span class="glyphicon glyphicon-exclamation-sign" aria-hidden="true"></span> Adapted in Marathon Version 1.0 <br/>
-  The Persistent Storage functionality is considered beta, so use this feature at your own risk. We might add, change, or delete any functionality described in this document.
-</div>
-
 Marathon applications lose their state when they terminate and are relaunched. In some contexts, for instance, if your application uses MySQL, you'll want your application to preserve its state. You can create a stateful application by specifying a local persistent volume. Local volumes enable stateful tasks because tasks can be restarted without data loss.
 
 When you specify a local volume or volumes, tasks and their associated data are "pinned" to the node they are first launched on and will be relaunched on that node if they terminate. The resources the application requires are also reserved. Marathon will implicitly reserve an appropriate amount of disk space (as declared in the volume via `persistent.size`) in addition to the sandbox `disk` size you specify as part of your application definition.
@@ -150,6 +145,7 @@ A model app definition for PostgreSQL on Marathon would look like this. Note tha
   "cpus": 1,
   "instances": 1,
   "mem": 512,
+  "networks": [ { "mode": "container/bridge" } ],
   "container": {
     "type": "DOCKER",
     "volumes": [
@@ -165,17 +161,16 @@ A model app definition for PostgreSQL on Marathon would look like this. Note tha
       }
     ],
     "docker": {
-      "image": "postgres:latest",
-      "network": "BRIDGE",
-      "portMappings": [
-        {
-          "containerPort": 5432,
-          "hostPort": 0,
-          "protocol": "tcp",
-          "name": "postgres"
-        }
-      ]
-    }
+      "image": "postgres:latest"
+    },
+    "portMappings": [
+      {
+        "containerPort": 5432,
+        "hostPort": 0,
+        "protocol": "tcp",
+        "name": "postgres"
+      }
+    ]
   },
   "env": {
     "POSTGRES_PASSWORD": "password",
@@ -227,6 +222,7 @@ The complete JSON application definition reads as follows:
   "mem": 512,
   "disk": 0,
   "instances": 1,
+  "networks": [ { "mode": "container/bridge" } ],
   "container": {
     "type": "DOCKER",
     "volumes": [
@@ -246,17 +242,16 @@ The complete JSON application definition reads as follows:
     ],
     "docker": {
       "image": "mysql",
-      "network": "BRIDGE",
-      "portMappings": [
-        {
-          "containerPort": 3306,
-          "hostPort": 0,
-          "servicePort": 10000,
-          "protocol": "tcp"
-        }
-      ],
       "forcePullImage": false
-    }
+    },
+    "portMappings": [
+      {
+        "containerPort": 3306,
+        "hostPort": 0,
+        "servicePort": 10000,
+        "protocol": "tcp"
+      }
+    ]
   },
   "env": {
     "MYSQL_USER": "wordpress",

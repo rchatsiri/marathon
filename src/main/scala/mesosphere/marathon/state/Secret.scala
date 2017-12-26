@@ -1,4 +1,5 @@
-package mesosphere.marathon.state
+package mesosphere.marathon
+package state
 
 import com.wix.accord._
 import com.wix.accord.dsl._
@@ -19,6 +20,6 @@ object Secret {
 
   def secretValidator: Validator[(String, Secret)] = validator[(String, Secret)] { t =>
     t._1 as s"(${t._1})" is notEmpty
-    t._2 as s"(${t._1})" is valid(validSecret)
+    t._2 as s"(${t._1})" is validSecret
   }
 }

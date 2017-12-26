@@ -32,8 +32,8 @@ case class AppLockedException(deploymentIds: Seq[String] = Nil)
   )
 
 class PortRangeExhaustedException(
-  val minPort: Int,
-  val maxPort: Int) extends Exception(s"All ports in the range [$minPort-$maxPort) are already in use")
+    val minPort: Int,
+    val maxPort: Int) extends Exception(s"All ports in the range [$minPort-$maxPort) are already in use")
 
 case class UpgradeInProgressException(msg: String) extends Exception(msg)
 
@@ -49,6 +49,13 @@ case class AccessDeniedException(msg: String = "Authorization Denied") extends E
   * @param failure validation information kept in a Failure object
   */
 case class ValidationFailedException(obj: Any, failure: Failure) extends Exception(s"Validation failed: $failure")
+
+/**
+  * Thrown for errors during [[Normalization]]. Validation should normally be checking for invalid data structures
+  * that would lead to errors during normalization, so these exceptions are very unexpected.
+  * @param msg provides details
+  */
+case class NormalizationException(msg: String) extends Exception(msg)
 
 case class SerializationFailedException(message: String) extends Exception(message)
 
@@ -83,3 +90,10 @@ class StoreCommandFailedException(msg: String, cause: Throwable = null) extends 
 @SuppressWarnings(Array("NullAssignment"))
 class MigrationFailedException(msg: String, cause: Throwable = null) extends Exception(msg, cause)
 
+/**
+  * Instances of this exception class are expected to be used to cancel
+  * an on-going migration. It is imperative to throw such an exception
+  * before writing anything to a persistence store.
+  */
+case class MigrationCancelledException(msg: String, cause: Throwable)
+  extends mesosphere.marathon.Exception(msg, cause)

@@ -7,9 +7,11 @@ import com.fasterxml.uuid.{ EthernetAddress, Generators }
 import mesosphere.marathon.core.condition.Condition
 import mesosphere.marathon.core.instance.Instance.{ AgentInfo, InstanceState }
 import mesosphere.marathon.core.task.Task
-import mesosphere.marathon.state.{ MarathonState, PathId, Timestamp, UnreachableStrategy }
+import mesosphere.marathon.state.{ MarathonState, PathId, Timestamp, UnreachableStrategy, UnreachableDisabled, UnreachableEnabled }
+import mesosphere.marathon.tasks.OfferUtil
 import mesosphere.marathon.stream.Implicits._
 import mesosphere.mesos.Placed
+import mesosphere.marathon.raml.Raml
 import org.apache._
 import org.apache.mesos.Protos.Attribute
 import play.api.libs.json._
@@ -26,7 +28,7 @@ case class Instance(
     state: InstanceState,
     tasksMap: Map[Task.Id, Task],
     runSpecVersion: Timestamp,
-    unreachableStrategy: UnreachableStrategy = UnreachableStrategy.defaultEphemeral) extends MarathonState[Protos.Json, Instance] with Placed {
+    unreachableStrategy: UnreachableStrategy) extends MarathonState[Protos.Json, Instance] with Placed {
 
   val runSpecId: PathId = instanceId.runSpecId
   val isLaunched: Boolean = state.condition.isActive
@@ -48,6 +50,11 @@ case class Instance(
   def isDropped: Boolean = state.condition == Condition.Dropped
   def isTerminated: Boolean = state.condition.isTerminal
   def isActive: Boolean = state.condition.isActive
+  def hasReservation =
+    tasksMap.values.exists {
+      case _: Task.ReservedTask => true
+      case _ => false
+    }
 
   override def mergeFromProto(message: Protos.Json): Instance = {
     Json.parse(message.getJson).as[Instance]
@@ -63,6 +70,10 @@ case class Instance(
   override def hostname: String = agentInfo.host
 
   override def attributes: Seq[Attribute] = agentInfo.attributes
+
+  override def zone: Option[String] = agentInfo.zone
+
+  override def region: Option[String] = agentInfo.region
 }
 
 @SuppressWarnings(Array("DuplicateImport"))
@@ -70,20 +81,8 @@ object Instance {
 
   import mesosphere.marathon.api.v2.json.Formats.TimestampFormat
 
-  @SuppressWarnings(Array("LooksLikeInterpolatedString"))
-  def apply(): Instance = {
-    // required for legacy store, remove when legacy storage is removed.
-    new Instance(
-      // need to provide an Id that passes the regex parser but would never overlap with a user-specified value
-      Instance.Id("$none.marathon-0"),
-      AgentInfo("", None, Nil),
-      InstanceState(Condition.Unknown, Timestamp.zero, activeSince = None, healthy = None),
-      Map.empty[Task.Id, Task],
-      Timestamp.zero)
-  }
-
-  def instancesById(tasks: Seq[Instance]): Map[Instance.Id, Instance] =
-    tasks.map(task => task.instanceId -> task)(collection.breakOut)
+  def instancesById(instances: Seq[Instance]): Map[Instance.Id, Instance] =
+    instances.map(instance => instance.instanceId -> instance)(collection.breakOut)
 
   /**
     * Describes the state of an instance which is an accumulation of task states.
@@ -133,12 +132,12 @@ object Instance {
       maybeOldState: Option[InstanceState],
       newTaskMap: Map[Task.Id, Task],
       now: Timestamp,
-      unreachableInactiveAfter: FiniteDuration = 5.minutes): InstanceState = {
+      unreachableStrategy: UnreachableStrategy): InstanceState = {
 
       val tasks = newTaskMap.values
 
       // compute the new instance condition
-      val condition = conditionFromTasks(tasks, now, unreachableInactiveAfter)
+      val condition = conditionFromTasks(tasks, now, unreachableStrategy)
 
       val active: Option[Timestamp] = activeSince(tasks)
 
@@ -152,14 +151,16 @@ object Instance {
     /**
       * @return condition for instance with tasks.
       */
-    def conditionFromTasks(tasks: Iterable[Task], now: Timestamp, unreachableInactiveAfter: FiniteDuration): Condition = {
+    def conditionFromTasks(tasks: Iterable[Task], now: Timestamp, unreachableStrategy: UnreachableStrategy): Condition = {
       if (tasks.isEmpty) {
         Condition.Unknown
       } else {
         // The smallest Condition according to conditionOrdering is the condition for the whole instance.
         tasks.view.map(_.status.condition).minBy(conditionHierarchy) match {
-          case Condition.Unreachable if shouldBecomeInactive(tasks, now, unreachableInactiveAfter) => Condition.UnreachableInactive
-          case condition => condition
+          case Condition.Unreachable if shouldBecomeInactive(tasks, now, unreachableStrategy) =>
+            Condition.UnreachableInactive
+          case condition =>
+            condition
         }
       }
     }
@@ -177,9 +178,12 @@ object Instance {
     /**
       * @return if one of tasks has been UnreachableInactive for more than unreachableInactiveAfter.
       */
-    def shouldBecomeInactive(tasks: Iterable[Task], now: Timestamp, unreachableInactiveAfter: FiniteDuration): Boolean = {
-      tasks.exists(_.isUnreachableExpired(now, unreachableInactiveAfter))
-    }
+    def shouldBecomeInactive(tasks: Iterable[Task], now: Timestamp, unreachableStrategy: UnreachableStrategy): Boolean =
+      unreachableStrategy match {
+        case UnreachableDisabled => false
+        case unreachableEnabled: UnreachableEnabled =>
+          tasks.exists(_.isUnreachableExpired(now, unreachableEnabled.inactiveAfter))
+      }
   }
 
   private[this] def isRunningUnhealthy(task: Task): Boolean = {
@@ -266,14 +270,18 @@ object Instance {
     * Info relating to the host on which the Instance has been launched.
     */
   case class AgentInfo(
-    host: String,
-    agentId: Option[String],
-    attributes: Seq[mesos.Protos.Attribute])
+      host: String,
+      agentId: Option[String],
+      region: Option[String],
+      zone: Option[String],
+      attributes: Seq[Attribute])
 
   object AgentInfo {
     def apply(offer: org.apache.mesos.Protos.Offer): AgentInfo = AgentInfo(
       host = offer.getHostname,
       agentId = Some(offer.getSlaveId.getValue),
+      region = OfferUtil.region(offer),
+      zone = OfferUtil.zone(offer),
       attributes = offer.getAttributesList.toIndexedSeq
     )
   }
@@ -291,7 +299,7 @@ object Instance {
       throw new IllegalStateException(s"No task in ${instance.instanceId}"))
   }
 
-  implicit object AttributeFormat extends Format[mesos.Protos.Attribute] {
+  implicit object AttributeFormat extends Format[Attribute] {
     override def reads(json: JsValue): JsResult[Attribute] = {
       json.validate[String].map { base64 =>
         mesos.Protos.Attribute.parseFrom(Base64.getDecoder.decode(base64))
@@ -313,14 +321,36 @@ object Instance {
     }
   }
 
-  implicit val unreachableStrategyFormat: Format[UnreachableStrategy] = Json.format[UnreachableStrategy]
+  // host: String,
+  // agentId: Option[String],
+  // region: String,
+  // zone: String,
+  // attributes: Seq[mesos.Protos.Attribute])
+  // private val agentFormatWrites: Writes[AgentInfo] = Json.format[AgentInfo]
+  private val agentReads: Reads[AgentInfo] = (
+    (__ \ "host").read[String] ~
+    (__ \ "agentId").readNullable[String] ~
+    (__ \ "region").readNullable[String] ~
+    (__ \ "zone").readNullable[String] ~
+    (__ \ "attributes").read[Seq[mesos.Protos.Attribute]]
+  )(AgentInfo(_, _, _, _, _))
 
-  implicit val agentFormat: Format[AgentInfo] = Json.format[AgentInfo]
+  implicit val agentFormat: Format[AgentInfo] = Format(agentReads, Json.writes[AgentInfo])
   implicit val idFormat: Format[Instance.Id] = Json.format[Instance.Id]
-  implicit val instanceConditionFormat: Format[Condition] = Json.format[Condition]
+  implicit val instanceConditionFormat: Format[Condition] = Condition.conditionFormat
   implicit val instanceStateFormat: Format[InstanceState] = Json.format[InstanceState]
 
-  implicit val instanceJsonWrites: Writes[Instance] = Json.writes[Instance]
+  implicit val instanceJsonWrites: Writes[Instance] = {
+    (
+      (__ \ "instanceId").write[Instance.Id] ~
+      (__ \ "agentInfo").write[AgentInfo] ~
+      (__ \ "tasksMap").write[Map[Task.Id, Task]] ~
+      (__ \ "runSpecVersion").write[Timestamp] ~
+      (__ \ "state").write[InstanceState] ~
+      (__ \ "unreachableStrategy").write[raml.UnreachableStrategy]
+    ) { (i) => (i.instanceId, i.agentInfo, i.tasksMap, i.runSpecVersion, i.state, Raml.toRaml(i.unreachableStrategy)) }
+  }
+
   implicit val unreachableStrategyReads: Reads[Instance] = {
     (
       (__ \ "instanceId").read[Instance.Id] ~
@@ -328,9 +358,10 @@ object Instance {
       (__ \ "tasksMap").read[Map[Task.Id, Task]] ~
       (__ \ "runSpecVersion").read[Timestamp] ~
       (__ \ "state").read[InstanceState] ~
-      (__ \ "unreachableStrategy").readNullable[UnreachableStrategy]
+      (__ \ "unreachableStrategy").readNullable[raml.UnreachableStrategy]
     ) { (instanceId, agentInfo, tasksMap, runSpecVersion, state, maybeUnreachableStrategy) =>
-        val unreachableStrategy = maybeUnreachableStrategy.getOrElse(UnreachableStrategy.defaultEphemeral)
+        val unreachableStrategy = maybeUnreachableStrategy.
+          map(Raml.fromRaml(_)).getOrElse(UnreachableStrategy.default())
         new Instance(instanceId, agentInfo, state, tasksMap, runSpecVersion, unreachableStrategy)
       }
   }
@@ -362,18 +393,11 @@ object Instance {
   * @param tasksMap a map of one key/value pair consisting of the actual task
   * @param runSpecVersion the version of the task related runSpec
   */
-class LegacyAppInstance(
-  instanceId: Instance.Id,
-  agentInfo: Instance.AgentInfo,
-  state: InstanceState,
-  tasksMap: Map[Task.Id, Task],
-  runSpecVersion: Timestamp) extends Instance(instanceId, agentInfo, state, tasksMap, runSpecVersion)
-
 object LegacyAppInstance {
-  def apply(task: Task, agentInfo: AgentInfo, unreachableStrategy: UnreachableStrategy = UnreachableStrategy.defaultEphemeral): Instance = {
+  def apply(task: Task, agentInfo: AgentInfo, unreachableStrategy: UnreachableStrategy): Instance = {
     val since = task.status.startedAt.getOrElse(task.status.stagedAt)
     val tasksMap = Map(task.taskId -> task)
-    val state = Instance.InstanceState(None, tasksMap, since)
+    val state = Instance.InstanceState(None, tasksMap, since, unreachableStrategy)
 
     new Instance(task.taskId.instanceId, agentInfo, state, tasksMap, task.runSpecVersion, unreachableStrategy)
   }

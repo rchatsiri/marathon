@@ -1,8 +1,10 @@
-package mesosphere.marathon.core.task.termination
+package mesosphere.marathon
+package core.task.termination
+
+import java.time.Clock
 
 import akka.actor.{ ActorRef, Props }
 import mesosphere.marathon.MarathonSchedulerDriverHolder
-import mesosphere.marathon.core.base.Clock
 import mesosphere.marathon.core.leadership.LeadershipModule
 import mesosphere.marathon.core.task.termination.impl.{ KillServiceActor, KillServiceDelegate }
 import mesosphere.marathon.core.task.tracker.InstanceTrackerModule

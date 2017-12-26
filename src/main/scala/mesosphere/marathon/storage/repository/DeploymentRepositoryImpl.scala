@@ -1,4 +1,5 @@
-package mesosphere.marathon.storage.repository
+package mesosphere.marathon
+package storage.repository
 
 import java.time.OffsetDateTime
 
@@ -10,12 +11,12 @@ import akka.stream.scaladsl.Source
 import akka.{ Done, NotUsed }
 import com.typesafe.scalalogging.StrictLogging
 import mesosphere.marathon.Protos
+import mesosphere.marathon.core.deployment.DeploymentPlan
+import mesosphere.marathon.core.storage.repository.RepositoryConstants
 import mesosphere.marathon.core.storage.repository.impl.PersistenceStoreRepository
 import mesosphere.marathon.core.storage.store.{ IdResolver, PersistenceStore }
-import mesosphere.marathon.metrics.Metrics
 import mesosphere.marathon.state.{ RootGroup, Timestamp }
 import mesosphere.marathon.storage.repository.GcActor.{ StoreApp, StorePlan, StorePod, StoreRoot }
-import mesosphere.marathon.upgrade.DeploymentPlan
 
 import scala.async.Async.{ async, await }
 import scala.concurrent.{ ExecutionContext, Future, Promise }
@@ -82,16 +83,15 @@ class DeploymentRepositoryImpl[K, C, S](
     appRepository: AppRepositoryImpl[K, C, S],
     podRepository: PodRepositoryImpl[K, C, S],
     maxVersions: Int)(implicit
-  ir: IdResolver[String, StoredPlan, C, K],
+    ir: IdResolver[String, StoredPlan, C, K],
     marshaller: Marshaller[StoredPlan, S],
     unmarshaller: Unmarshaller[S, StoredPlan],
     ctx: ExecutionContext,
     actorRefFactory: ActorRefFactory,
-    mat: Materializer,
-    metrics: Metrics) extends DeploymentRepository {
+    mat: Materializer) extends DeploymentRepository {
 
   private val gcActor = GcActor(
-    s"PersistenceGarbageCollector:$hashCode",
+    s"PersistenceGarbageCollector-$hashCode",
     this, groupRepository, appRepository, podRepository, maxVersions)
 
   appRepository.beforeStore = Some((id, version) => {
@@ -137,7 +137,7 @@ class DeploymentRepositoryImpl[K, C, S](
   override def ids(): Source[String, NotUsed] = repo.ids()
 
   override def all(): Source[DeploymentPlan, NotUsed] =
-    repo.ids().mapAsync(Int.MaxValue)(get).collect { case Some(g) => g }
+    repo.ids().mapAsync(RepositoryConstants.maxConcurrency)(get).collect { case Some(g) => g }
 
   @SuppressWarnings(Array("all")) // async/await
   override def get(id: String): Future[Option[DeploymentPlan]] = async { // linter:ignore UnnecessaryElseBranch
@@ -150,6 +150,6 @@ class DeploymentRepositoryImpl[K, C, S](
   }
 
   private[storage] def lazyAll(): Source[StoredPlan, NotUsed] =
-    repo.ids().mapAsync(Int.MaxValue)(repo.get).collect { case Some(g) => g }
+    repo.ids().mapAsync(RepositoryConstants.maxConcurrency)(repo.get).collect { case Some(g) => g }
 }
 

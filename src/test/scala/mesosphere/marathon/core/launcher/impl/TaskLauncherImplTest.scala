@@ -4,13 +4,11 @@ package core.launcher.impl
 import java.util
 import java.util.Collections
 
-import com.codahale.metrics.MetricRegistry
 import mesosphere.UnitTest
 import mesosphere.marathon.core.instance.TestInstanceBuilder._
 import mesosphere.marathon.core.instance.{ Instance, TestInstanceBuilder }
 import mesosphere.marathon.core.launcher.{ InstanceOp, TaskLauncher }
 import mesosphere.marathon.core.task.Task
-import mesosphere.marathon.metrics.Metrics
 import mesosphere.marathon.state.PathId
 import mesosphere.marathon.stream.Implicits._
 import mesosphere.marathon.test.MarathonTestHelper
@@ -35,14 +33,13 @@ class TaskLauncherImplTest extends UnitTest {
   private[this] val launch1 = launch(MarathonTestHelper.makeOneCPUTask(Task.Id.forInstanceId(instanceId, None)))
   private[this] val launch2 = launch(MarathonTestHelper.makeOneCPUTask(Task.Id.forInstanceId(instanceId, None)))
   private[this] val ops = Seq(launch1, launch2)
-  private[this] val opsAsJava = ops.flatMap(_.offerOperations)
+  private[this] val opsAsJava = ops.flatMap(_.offerOperations).asJava
   private[this] val filter = Protos.Filters.newBuilder().setRefuseSeconds(0).build()
 
   case class Fixture(driver: Option[SchedulerDriver] = Some(mock[SchedulerDriver])) {
-    val metrics: Metrics = new Metrics(new MetricRegistry)
     val driverHolder: MarathonSchedulerDriverHolder = new MarathonSchedulerDriverHolder
     driverHolder.driver = driver
-    val launcher: TaskLauncher = new TaskLauncherImpl(metrics, driverHolder)
+    val launcher: TaskLauncher = new TaskLauncherImpl(driverHolder)
 
     def verifyClean(): Unit = {
       driverHolder.driver.foreach(Mockito.verifyNoMoreInteractions(_))

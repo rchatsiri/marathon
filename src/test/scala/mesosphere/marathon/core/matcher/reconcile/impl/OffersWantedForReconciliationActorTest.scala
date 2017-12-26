@@ -5,12 +5,13 @@ import akka.actor.{ Cancellable, Terminated }
 import akka.event.EventStream
 import akka.testkit.{ TestActorRef, TestProbe }
 import mesosphere.AkkaUnitTest
-import mesosphere.marathon.core.base.ConstantClock
+import mesosphere.marathon.test.SettableClock
 import mesosphere.marathon.core.event.DeploymentStepSuccess
 import mesosphere.marathon.core.flow.ReviveOffersConfig
-import mesosphere.marathon.state.{ AppDefinition, PathId, Residency }
+import mesosphere.marathon.state._
 import mesosphere.marathon.test.{ GroupCreation, MarathonTestHelper }
-import mesosphere.marathon.upgrade.DeploymentPlan
+import mesosphere.marathon.core.deployment.DeploymentPlan
+import org.apache.mesos.{ Protos => mesos }
 import rx.lang.scala.Subject
 import rx.lang.scala.subjects.PublishSubject
 
@@ -60,7 +61,17 @@ class OffersWantedForReconciliationActorTest extends AkkaUnitTest with GroupCrea
 
       When("the deployment for a resident app stops")
       val valAfterDeploymentStepSuccess = f.futureOffersWanted()
-      val app = AppDefinition(PathId("/resident"), residency = Some(Residency.default))
+      val vol = VolumeWithMount(
+        volume = PersistentVolume(name = None, persistent = PersistentVolumeInfo(123)),
+        mount = VolumeMount(volumeName = None, mountPath = "bar", readOnly = false))
+      val zero = UpgradeStrategy(0, 0)
+      val app = AppDefinition(
+        PathId("/resident"),
+        cmd = Some("sleep"),
+        residency = Some(Residency.default),
+        container = Some(Container.Mesos(Seq(vol))),
+        upgradeStrategy = zero,
+        unreachableStrategy = UnreachableDisabled)
       val plan = DeploymentPlan(original = createRootGroup(apps = Map(app.id -> app)), target = createRootGroup())
       f.eventStream.publish(DeploymentStepSuccess(plan = plan, currentStep = plan.steps.head))
 
@@ -83,7 +94,7 @@ class OffersWantedForReconciliationActorTest extends AkkaUnitTest with GroupCrea
   }
   class Fixture {
     lazy val reviveOffersConfig: ReviveOffersConfig = MarathonTestHelper.defaultConfig()
-    lazy val clock: ConstantClock = ConstantClock()
+    lazy val clock: SettableClock = new SettableClock()
     lazy val eventStream: EventStream = system.eventStream
     lazy val offersWanted: Subject[Boolean] = PublishSubject()
 

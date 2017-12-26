@@ -3,12 +3,13 @@ package core.group
 
 import java.time.OffsetDateTime
 
-import akka.NotUsed
+import akka.{ Done, NotUsed }
 import akka.stream.scaladsl.Source
 import mesosphere.marathon.core.instance.Instance
 import mesosphere.marathon.core.pod.PodDefinition
+import mesosphere.marathon.core.async.ExecutionContexts
 import mesosphere.marathon.state.{ AppDefinition, Group, PathId, RootGroup, RunSpec, Timestamp }
-import mesosphere.marathon.upgrade.DeploymentPlan
+import mesosphere.marathon.core.deployment.DeploymentPlan
 
 import scala.concurrent.Future
 import scala.collection.immutable.Seq
@@ -16,17 +17,31 @@ import scala.collection.immutable.Seq
 /**
   * The group manager is the facade for all group related actions.
   * It persists the state of a group and initiates deployments.
+  *
+  * Only 1 update to the root will be processed at a time.
   */
 trait GroupManager {
 
-  def rootGroup(): Future[RootGroup]
+  /**
+    * Get a root group, fetching it from a persistence store if necessary.
+    *
+    * @return a root group
+    */
+  def rootGroup(): RootGroup
+
+  /**
+    * Get a root group.
+    *
+    * @return a root group if it has been fetched already, otherwise [[None]]
+    */
+  def rootGroupOption(): Option[RootGroup]
 
   /**
     * Get all available versions for given group identifier.
     * @param id the identifier of the group.
     * @return the list of versions of this object.
     */
-  def versions(id: PathId): Future[Seq[Timestamp]]
+  def versions(id: PathId): Source[Timestamp, NotUsed]
 
   /**
     * Get all available app versions for a given app id
@@ -53,7 +68,7 @@ trait GroupManager {
     * @param id the id of the group.
     * @return the group if it is found, otherwise None
     */
-  def group(id: PathId): Future[Option[Group]]
+  def group(id: PathId): Option[Group]
 
   /**
     * Get a specific group with a specific version.
@@ -66,23 +81,30 @@ trait GroupManager {
   /**
     * Get a specific run spec by its Id
     * @param id The id of the runSpec
-    * @return The run spec if it is found, otherwise none.
+    * @return The run spec if it is found, otherwise None.
     */
-  def runSpec(id: PathId): Future[Option[RunSpec]]
+  def runSpec(id: PathId): Option[RunSpec]
 
   /**
     * Get a specific app definition by its id.
     * @param id the id of the app.
+    * @return the app if it is found, otherwise None
+    */
+  def app(id: PathId): Option[AppDefinition]
+
+  /**
+    * Get a specific app definition by its id.
+    * @param ids the ids of the apps.
     * @return the app if it is found, otherwise false
     */
-  def app(id: PathId): Future[Option[AppDefinition]]
+  def apps(ids: Set[PathId]): Map[PathId, Option[AppDefinition]]
 
   /**
     * Get a specific pod definition by its id.
     * @param id the id of the pod.
-    * @return the pod if it is found, otherwise false
+    * @return the pod if it is found, otherwise None
     */
-  def pod(id: PathId): Future[Option[PodDefinition]]
+  def pod(id: PathId): Option[PodDefinition]
 
   /**
     * Update a group with given identifier.
@@ -91,17 +113,41 @@ trait GroupManager {
     * The change could take time to get deployed.
     * For this reason, we return the DeploymentPlan as result, which can be queried in the marathon scheduler.
     *
+    * Only a single updateRoot call will be processed at a time and the root will be updated once the plan
+    * starts getting processed.
+    *
+    * @param id The id of the group being edited (for event publishing purposes). This should be the
+    *           finest grained group being edited, for example, if app "/a/b/c/d" is being edited,
+    *           the id should be "/a/b/c"
     * @param fn the update function, which is applied to the root group
     * @param version the new version of the group, after the change has applied.
     * @param force only one update can be applied to applications at a time. with this flag
     *              one can control, to stop a current deployment and start a new one.
     * @return the deployment plan which will be executed.
     */
-  def updateRoot(
+  final def updateRoot(
+    id: PathId,
     fn: RootGroup => RootGroup,
+    version: Timestamp = Group.defaultVersion,
+    force: Boolean = false,
+    toKill: Map[PathId, Seq[Instance]] = Map.empty): Future[DeploymentPlan] = updateRootAsync(id, (g: RootGroup) => Future.successful(fn(g)), version, force, toKill)
+
+  final def updateRootAsync(
+    id: PathId,
+    fn: RootGroup => Future[RootGroup],
+    version: Timestamp = Group.defaultVersion,
+    force: Boolean = false,
+    toKill: Map[PathId, Seq[Instance]] = Map.empty): Future[DeploymentPlan] = {
+    updateRootEither[Nothing](id, fn(_).map(Right(_))(ExecutionContexts.callerThread), version, force, toKill)
+      .map(_.right.getOrElse(throw new RuntimeException("Either must be Right here")))(ExecutionContexts.callerThread)
+  }
+
+  def updateRootEither[T](
+    id: PathId,
+    fn: RootGroup => Future[Either[T, RootGroup]],
     version: Timestamp = Timestamp.now(),
     force: Boolean = false,
-    toKill: Map[PathId, Seq[Instance]] = Map.empty): Future[DeploymentPlan]
+    toKill: Map[PathId, Seq[Instance]] = Map.empty): Future[Either[T, DeploymentPlan]]
 
   /**
     * Update application with given identifier and update function.
@@ -117,15 +163,36 @@ trait GroupManager {
   def updateApp(
     appId: PathId,
     fn: Option[AppDefinition] => AppDefinition,
-    version: Timestamp = Timestamp.now(),
+    version: Timestamp = Group.defaultVersion,
     force: Boolean = false,
-    toKill: Seq[Instance] = Seq.empty): Future[DeploymentPlan]
+    toKill: Seq[Instance] = Seq.empty): Future[DeploymentPlan] =
+    updateRoot(appId.parent, _.updateApp(appId, fn, version), version, force, Map(appId -> toKill))
 
+  /**
+    * Update pod with given identifier and update function.
+    * The change could take time to get deployed.
+    * For this reason, we return the DeploymentPlan as result, which can be queried in the marathon scheduler.
+    *
+    * @param podId the identifier of the pod
+    * @param fn the pod change function
+    * @param version the version of the change
+    * @param force if the change has to be forced.
+    * @return the deployment plan which will be executed.
+    */
   def updatePod(
     podId: PathId,
     fn: Option[PodDefinition] => PodDefinition,
-    version: Timestamp = Timestamp.now(),
+    version: Timestamp = Group.defaultVersion,
     force: Boolean = false,
     toKill: Seq[Instance] = Seq.empty
-  ): Future[DeploymentPlan]
+  ): Future[DeploymentPlan] = updateRoot(
+    podId.parent, _.updatePod(podId, fn, version), version, force, Map(podId -> toKill))
+
+  /**
+    * Refresh the internal root group cache. When calling this function, the internal hold cached root group will be dropped
+    * and loaded when accessing the next time.
+    *
+    * @return Done if refresh was successful
+    */
+  def invalidateGroupCache(): Future[Done]
 }

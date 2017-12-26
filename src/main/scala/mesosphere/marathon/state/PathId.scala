@@ -1,4 +1,5 @@
-package mesosphere.marathon.state
+package mesosphere.marathon
+package state
 
 import com.wix.accord._
 import com.wix.accord.dsl._
@@ -20,7 +21,7 @@ case class PathId(path: Seq[String], absolute: Boolean = true) extends Ordered[P
 
   def isRoot: Boolean = path.isEmpty
 
-  def parent: PathId = path match {
+  lazy val parent: PathId = path match {
     case Nil => this
     case head +: Nil => PathId(Nil, absolute)
     case head +: rest => PathId(path.init, absolute)
@@ -60,7 +61,7 @@ case class PathId(path: Seq[String], absolute: Boolean = true) extends Ordered[P
   }
 
   def safePath: String = {
-    require(absolute, "Path is not absolute. Can not create safe path.")
+    require(absolute, s"Path absolute flag is not true for path ${this.toString}. Can not create safe path.")
     path.mkString("_")
   }
 
@@ -83,12 +84,12 @@ case class PathId(path: Seq[String], absolute: Boolean = true) extends Ordered[P
 
   override def equals(obj: Any): Boolean = {
     obj match {
-      case that: PathId => (that eq this) || (that.toString == toString)
+      case that: PathId => (that eq this) || (that.hashCode == hashCode && that.absolute == absolute && that.path == path)
       case _ => false
     }
   }
 
-  override def hashCode(): Int = toString.hashCode()
+  override val hashCode: Int = scala.util.hashing.MurmurHash3.productHash(this)
 }
 
 object PathId {
@@ -96,8 +97,21 @@ object PathId {
     if (in.isEmpty) PathId.empty
     else PathId(in.split("_").toList, absolute = true)
   }
-  def apply(in: String): PathId =
-    PathId(in.replaceAll("""(^/+)|(/+$)""", "").split("/").filter(_.nonEmpty).toList, in.startsWith("/"))
+
+  /**
+    * Removes empty path segments
+    * @param pieces collection with path segments
+    * @param absolute is path absolute
+    * @return created path
+    */
+  def sanitized(pieces: TraversableOnce[String], absolute: Boolean = true) =
+    PathId(pieces.filter(_.nonEmpty).toList, absolute)
+
+  def apply(in: String): PathId = {
+    val raw = in.replaceAll("""(^/+)|(/+$)""", "").split("/")
+    sanitized(raw, in.startsWith("/"))
+  }
+
   def empty: PathId = PathId(Nil)
 
   implicit class StringPathId(val stringPath: String) extends AnyVal {
@@ -108,16 +122,14 @@ object PathId {
   /**
     * This regular expression is used to validate each path segment of an ID.
     *
-    * If you change this, please also change "pathType" in AppDefinition.json and
+    * If you change this, please also change `pathType` in AppDefinition.json, `PathId` in stringTypes.raml, and
     * notify the maintainers of the DCOS CLI.
     */
   private[this] val ID_PATH_SEGMENT_PATTERN =
     "^(([a-z0-9]|[a-z0-9][a-z0-9\\-]*[a-z0-9])\\.)*([a-z0-9]|[a-z0-9][a-z0-9\\-]*[a-z0-9])|(\\.|\\.\\.)$".r
 
-  private val validPathChars = new Validator[PathId] {
-    override def apply(pathId: PathId): Result = {
-      validate(pathId.path)(validator = pathId.path.each should matchRegexFully(ID_PATH_SEGMENT_PATTERN.pattern))
-    }
+  private val validPathChars = isTrue[PathId](s"must fully match regular expression '${ID_PATH_SEGMENT_PATTERN.pattern.pattern()}'") { id =>
+    id.path.forall(part => ID_PATH_SEGMENT_PATTERN.pattern.matcher(part).matches())
   }
 
   /**
@@ -139,11 +151,11 @@ object PathId {
 
   /**
     * Make sure that the given path is a child of the defined parent path.
-    * Every root and every relative path can be ignored.
+    * Every relative path can be ignored.
     */
   private def childOf(parent: PathId): Validator[PathId] = {
     isTrue[PathId](s"Identifier is not child of $parent. Hint: use relative paths.") { child =>
-      parent == PathId.empty || !parent.absolute || (parent.absolute && child.canonicalPath(parent).parent == parent)
+      !parent.absolute || (child.canonicalPath(parent).parent == parent)
     }
   }
 

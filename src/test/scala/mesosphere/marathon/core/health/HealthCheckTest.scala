@@ -9,6 +9,7 @@ import mesosphere.marathon.core.instance.Instance.AgentInfo
 import mesosphere.marathon.core.instance.{ LegacyAppInstance, TestInstanceBuilder, TestTaskBuilder }
 import mesosphere.marathon.core.task.Task
 import mesosphere.marathon.core.task.state.NetworkInfo
+import mesosphere.marathon.raml.{ AppHealthCheck, Raml }
 import mesosphere.marathon.state._
 import mesosphere.marathon.test.MarathonTestHelper
 import play.api.libs.json.Json
@@ -16,6 +17,7 @@ import play.api.libs.json.Json
 import scala.concurrent.duration._
 
 class HealthCheckTest extends UnitTest {
+
   "HealthCheck" should {
     "ToProto Marathon HTTP HealthCheck with portIndex" in {
       val healthCheck = MarathonHttpHealthCheck(
@@ -223,12 +225,12 @@ class HealthCheckTest extends UnitTest {
     }
 
     def toJson(healthCheck: HealthCheck): String = {
-      import mesosphere.marathon.api.v2.json.Formats._
-      Json.prettyPrint(Json.toJson(healthCheck))
+      val ramlObj: AppHealthCheck = Raml.toRaml(healthCheck)
+      Json.prettyPrint(AppHealthCheck.playJsonFormat.writes(ramlObj))
     }
     def fromJson(json: String): HealthCheck = {
-      import mesosphere.marathon.api.v2.json.Formats._
-      Json.fromJson[HealthCheck](Json.parse(json))(HealthCheckFormat).get
+      val parsed: AppHealthCheck = Json.parse(json).as[AppHealthCheck]
+      Raml.fromRaml(parsed)
     }
 
     "SerializationRoundtrip empty" in {
@@ -285,7 +287,7 @@ class HealthCheckTest extends UnitTest {
         .withNetworkInfo(hostPorts = Seq(4321))
         .build().getInstance()
 
-      assert(check.effectivePort(app, instance) == 1234)
+      assert(check.effectivePort(app, instance) == Option(1234))
     }
 
     "effectivePort with a port index" in {
@@ -293,15 +295,15 @@ class HealthCheckTest extends UnitTest {
       val check = new MarathonTcpHealthCheck(portIndex = Some(PortReference(0)))
       val app = MarathonTestHelper.makeBasicApp().withPortDefinitions(Seq(PortDefinition(0)))
       val hostName = "hostName"
-      val agentInfo = AgentInfo(host = hostName, agentId = Some("agent"), attributes = Nil)
+      val agentInfo = AgentInfo(host = hostName, agentId = Some("agent"), region = None, zone = None, attributes = Nil)
       val task = {
         val t: Task.LaunchedEphemeral = TestTaskBuilder.Helper.runningTaskForApp(app.id)
         val hostPorts = Seq(4321)
         t.copy(status = t.status.copy(networkInfo = NetworkInfo(hostName, hostPorts, ipAddresses = Nil)))
       }
-      val instance = LegacyAppInstance(task, agentInfo)
+      val instance = LegacyAppInstance(task, agentInfo, unreachableStrategy = UnreachableStrategy.default())
 
-      assert(check.effectivePort(app, instance) == 4321)
+      assert(check.effectivePort(app, instance) == Option(4321))
     }
   }
   private[this] def shouldBeInvalid(hc: HealthCheck): Unit = {
@@ -310,6 +312,6 @@ class HealthCheckTest extends UnitTest {
 
   private[this] def shouldBeValid(hc: HealthCheck): Unit = {
     val result = validate(hc)
-    assert(result.isSuccess, s"violations: ${ValidationHelper.getAllRuleConstrains(result)}")
+    assert(result.isSuccess, s"violations: ${ValidationHelper.getAllRuleConstraints(result)}")
   }
 }

@@ -2,27 +2,29 @@ package mesosphere.marathon
 
 import java.util.{ Timer, TimerTask }
 
+import akka.Done
 import akka.actor.ActorRef
 import akka.testkit.TestProbe
 import mesosphere.AkkaUnitTest
 import mesosphere.chaos.http.HttpConf
 import mesosphere.marathon.Protos.StorageVersion
-import mesosphere.marathon.core.base.RichRuntime
+import mesosphere.marathon.core.deployment.DeploymentManager
 import mesosphere.marathon.core.election.ElectionService
 import mesosphere.marathon.core.group.GroupManager
 import mesosphere.marathon.core.health.HealthCheckManager
 import mesosphere.marathon.core.heartbeat._
 import mesosphere.marathon.core.leadership.LeadershipCoordinator
+import mesosphere.marathon.core.storage.store.PersistenceStore
 import mesosphere.marathon.core.task.tracker.InstanceTracker
 import mesosphere.marathon.storage.migration.Migration
 import mesosphere.marathon.storage.repository.FrameworkIdRepository
+import mesosphere.marathon.util.ScallopStub
 import org.apache.mesos.{ SchedulerDriver, Protos => mesos }
 import org.mockito.Matchers.{ eq => mockEq }
 import org.mockito.Mockito
 import org.mockito.Mockito.when
 import org.mockito.invocation.InvocationOnMock
 import org.mockito.stubbing.Answer
-import org.rogach.scallop.ScallopOption
 
 import scala.concurrent.Future
 import scala.concurrent.duration._
@@ -40,22 +42,15 @@ object MarathonSchedulerServiceTest {
   def mockConfig: MarathonConf = {
     val config = mock(classOf[MarathonConf])
 
-    when(config.reconciliationInitialDelay).thenReturn(scallopOption(Some(ReconciliationDelay)))
-    when(config.reconciliationInterval).thenReturn(scallopOption(Some(ReconciliationInterval)))
-    when(config.scaleAppsInitialDelay).thenReturn(scallopOption(Some(ScaleAppsDelay)))
-    when(config.scaleAppsInterval).thenReturn(scallopOption(Some(ScaleAppsInterval)))
+    when(config.reconciliationInitialDelay).thenReturn(ScallopStub(Some(ReconciliationDelay)))
+    when(config.reconciliationInterval).thenReturn(ScallopStub(Some(ReconciliationInterval)))
+    when(config.scaleAppsInitialDelay).thenReturn(ScallopStub(Some(ScaleAppsDelay)))
+    when(config.scaleAppsInterval).thenReturn(ScallopStub(Some(ScaleAppsInterval)))
     when(config.zkTimeoutDuration).thenReturn(1.second)
-    when(config.maxActorStartupTime).thenReturn(scallopOption(Some(MaxActorStartupTime)))
-    when(config.onElectedPrepareTimeout).thenReturn(scallopOption(Some(OnElectedPrepareTimeout)))
+    when(config.maxActorStartupTime).thenReturn(ScallopStub(Some(MaxActorStartupTime)))
+    when(config.onElectedPrepareTimeout).thenReturn(ScallopStub(Some(OnElectedPrepareTimeout)))
 
     config
-  }
-
-  def scallopOption[A](a: Option[A]): ScallopOption[A] = {
-    new ScallopOption[A]("") {
-      override def get = a
-      override def apply() = a.get
-    }
   }
 }
 
@@ -65,6 +60,7 @@ class MarathonSchedulerServiceTest extends AkkaUnitTest {
   case class Fixture() {
     val probe: TestProbe = TestProbe()
     val heartbeatProbe: TestProbe = TestProbe()
+    val persistenceStore: PersistenceStore[_, _, _] = mock[PersistenceStore[_, _, _]]
     val leadershipCoordinator: LeadershipCoordinator = mock[LeadershipCoordinator]
     val healthCheckManager: HealthCheckManager = mock[HealthCheckManager]
     val config: MarathonConf = mockConfig
@@ -79,6 +75,10 @@ class MarathonSchedulerServiceTest extends AkkaUnitTest {
     val heartbeatActor: ActorRef = heartbeatProbe.ref
     val prePostDriverCallbacks: Seq[PrePostDriverCallback] = Seq.empty
     val mockTimer: Timer = mock[Timer]
+    val deploymentManager: DeploymentManager = mock[DeploymentManager]
+
+    persistenceStore.sync() returns Future.successful(Done)
+    groupManager.invalidateGroupCache() returns Future.successful(Done)
   }
 
   def driverFactory[T](provide: => SchedulerDriver): SchedulerDriverFactory = {
@@ -90,6 +90,7 @@ class MarathonSchedulerServiceTest extends AkkaUnitTest {
   "MarathonSchedulerService" should {
     "Start timer when elected" in new Fixture {
       val schedulerService = new MarathonSchedulerService(
+        persistenceStore,
         leadershipCoordinator,
         config,
         electionService,
@@ -98,6 +99,7 @@ class MarathonSchedulerServiceTest extends AkkaUnitTest {
         driverFactory(mock[SchedulerDriver]),
         system,
         migration,
+        deploymentManager,
         schedulerActor,
         heartbeatActor
       )
@@ -112,6 +114,7 @@ class MarathonSchedulerServiceTest extends AkkaUnitTest {
     "Cancel timer when defeated" in new Fixture {
       val driver = mock[SchedulerDriver]
       val schedulerService = new MarathonSchedulerService(
+        persistenceStore,
         leadershipCoordinator,
         config,
         electionService,
@@ -120,6 +123,7 @@ class MarathonSchedulerServiceTest extends AkkaUnitTest {
         driverFactory(driver),
         system,
         migration,
+        deploymentManager,
         schedulerActor,
         heartbeatActor
       ) {
@@ -136,36 +140,10 @@ class MarathonSchedulerServiceTest extends AkkaUnitTest {
       assert(Heartbeat.MessageDeactivate(MesosHeartbeatMonitor.sessionOf(driver)) == hmsg)
     }
 
-    "Exit on loss of leadership" in new Fixture {
-
-      val schedulerService = new MarathonSchedulerService(
-        leadershipCoordinator,
-        config,
-        electionService,
-        prePostDriverCallbacks,
-        groupManager,
-        driverFactory(mock[SchedulerDriver]),
-        system,
-        migration,
-        schedulerActor,
-        heartbeatActor) {
-        override def newTimer() = mockTimer
-      }
-
-      schedulerService.timer = mockTimer
-
-      when(leadershipCoordinator.prepareForStart()).thenReturn(Future.successful(()))
-
-      schedulerService.startLeadership()
-
-      schedulerService.stopLeadership()
-
-      exitCalled(RichRuntime.FatalErrorSignal).futureValue should be(true)
-    }
-
     "throw in start leadership when migration fails" in new Fixture {
 
       val schedulerService = new MarathonSchedulerService(
+        persistenceStore,
         leadershipCoordinator,
         config,
         electionService,
@@ -174,6 +152,7 @@ class MarathonSchedulerServiceTest extends AkkaUnitTest {
         driverFactory(mock[SchedulerDriver]),
         system,
         migration,
+        deploymentManager,
         schedulerActor,
         heartbeatActor
       )
@@ -194,10 +173,14 @@ class MarathonSchedulerServiceTest extends AkkaUnitTest {
       }
     }
 
-    "throw when the driver creation fails by some exception" in new Fixture {
+    "fail if a persistence store sync() fails" in new Fixture {
+      val mockedStore = mock[PersistenceStore[_, _, _]]
+      mockedStore.sync() throws new StoreCommandFailedException("Failed to sync")
+
       val driverFactory = mock[SchedulerDriverFactory]
 
       val schedulerService = new MarathonSchedulerService(
+        mockedStore,
         leadershipCoordinator,
         config,
         electionService,
@@ -206,6 +189,31 @@ class MarathonSchedulerServiceTest extends AkkaUnitTest {
         driverFactory,
         system,
         migration,
+        deploymentManager,
+        schedulerActor,
+        heartbeatActor
+      )
+
+      schedulerService.timer = mockTimer
+
+      val thrown = the[StoreCommandFailedException] thrownBy schedulerService.startLeadership()
+      thrown.getMessage should equal ("Failed to sync")
+    }
+
+    "throw when the driver creation fails by some exception" in new Fixture {
+      val driverFactory = mock[SchedulerDriverFactory]
+
+      val schedulerService = new MarathonSchedulerService(
+        persistenceStore,
+        leadershipCoordinator,
+        config,
+        electionService,
+        prePostDriverCallbacks,
+        groupManager,
+        driverFactory,
+        system,
+        migration,
+        deploymentManager,
         schedulerActor,
         heartbeatActor
       )
@@ -225,6 +233,7 @@ class MarathonSchedulerServiceTest extends AkkaUnitTest {
       val driverFactory = mock[SchedulerDriverFactory]
 
       val schedulerService = new MarathonSchedulerService(
+        persistenceStore,
         leadershipCoordinator,
         config,
         electionService,
@@ -233,6 +242,7 @@ class MarathonSchedulerServiceTest extends AkkaUnitTest {
         driverFactory,
         system,
         migration,
+        deploymentManager,
         schedulerActor,
         heartbeatActor
       )
@@ -244,7 +254,7 @@ class MarathonSchedulerServiceTest extends AkkaUnitTest {
       when(driver.run()).thenThrow(new RuntimeException("driver failure"))
 
       schedulerService.startLeadership()
-      verify(electionService, Mockito.timeout(1000)).abdicateLeadership(error = true, reoffer = true)
+      verify(electionService, Mockito.timeout(1000)).abdicateLeadership()
     }
 
     "Pre/post driver callbacks are called" in new Fixture {
@@ -256,6 +266,7 @@ class MarathonSchedulerServiceTest extends AkkaUnitTest {
       val driverFactory = mock[SchedulerDriverFactory]
 
       val schedulerService = new MarathonSchedulerService(
+        persistenceStore,
         leadershipCoordinator,
         config,
         electionService,
@@ -264,6 +275,7 @@ class MarathonSchedulerServiceTest extends AkkaUnitTest {
         driverFactory,
         system,
         migration,
+        deploymentManager,
         schedulerActor,
         heartbeatActor
       )
@@ -292,8 +304,6 @@ class MarathonSchedulerServiceTest extends AkkaUnitTest {
 
       driverCompleted.countDown()
       awaitAssert(verify(cb).postDriverTerminates)
-
-      exitCalled(RichRuntime.FatalErrorSignal).futureValue should be(true)
     }
   }
 }

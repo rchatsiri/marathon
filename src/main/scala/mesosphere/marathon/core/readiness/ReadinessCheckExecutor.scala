@@ -25,13 +25,13 @@ object ReadinessCheckExecutor {
     * a readiness check.
     */
   case class ReadinessCheckSpec(
-    taskId: Task.Id,
-    checkName: String,
-    url: String,
-    interval: FiniteDuration = ReadinessCheck.DefaultInterval,
-    timeout: FiniteDuration = ReadinessCheck.DefaultTimeout,
-    httpStatusCodesForReady: Set[Int] = ReadinessCheck.DefaultHttpStatusCodesForReady,
-    preserveLastResponse: Boolean = ReadinessCheck.DefaultPreserveLastResponse)
+      taskId: Task.Id,
+      checkName: String,
+      url: String,
+      interval: FiniteDuration = ReadinessCheck.DefaultInterval,
+      timeout: FiniteDuration = ReadinessCheck.DefaultTimeout,
+      httpStatusCodesForReady: Set[Int] = ReadinessCheck.DefaultHttpStatusCodesForReady,
+      preserveLastResponse: Boolean = ReadinessCheck.DefaultPreserveLastResponse)
 
   object ReadinessCheckSpec {
     /**
@@ -58,7 +58,7 @@ object ReadinessCheckExecutor {
                 case ReadinessCheck.Protocol.HTTPS => "https"
               }
 
-              val portAssignments: Seq[PortAssignment] = task.status.networkInfo.portAssignments(app)
+              val portAssignments: Seq[PortAssignment] = task.status.networkInfo.portAssignments(app, includeUnresolved = false)
               val effectivePortAssignment = portAssignments.find(_.portName.contains(checkDef.portName)).getOrElse(
                 throw new IllegalArgumentException(s"no port definition for port name '${checkDef.portName}' was found"))
 

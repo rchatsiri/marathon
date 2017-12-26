@@ -5,7 +5,7 @@ import mesosphere.marathon.core.instance.Instance
 import mesosphere.marathon.core.instance.update.InstanceUpdateOperation
 import mesosphere.marathon.stream.Implicits._
 import mesosphere.marathon.tasks.ResourceUtil
-import mesosphere.mesos.ResourceHelpers.DiskRichResource
+import mesosphere.marathon.tasks.ResourceUtil.RichResource
 import org.apache.mesos.{ Protos => MesosProtos }
 
 /**
@@ -74,7 +74,7 @@ object InstanceOp {
       val reservationsForDisks = withDisk.map { resource =>
         val resourceBuilder = resource.toBuilder
         // If non-root disk resource, we want to clear ALL fields except for the field indicating the disk source.
-        resource.getSourceOption match {
+        resource.getDiskSourceOption match {
           case Some(source) =>
             resourceBuilder.setDisk(
               MesosProtos.Resource.DiskInfo.newBuilder.
@@ -90,7 +90,7 @@ object InstanceOp {
         if (withDisk.nonEmpty) {
           val destroyOp =
             MesosProtos.Offer.Operation.Destroy.newBuilder()
-              .addAllVolumes(withDisk)
+              .addAllVolumes(withDisk.asJava)
 
           val op =
             MesosProtos.Offer.Operation.newBuilder()
@@ -104,8 +104,8 @@ object InstanceOp {
       val maybeUnreserve: Option[MesosProtos.Offer.Operation] =
         if (withDisk.nonEmpty || reservationsForDisks.nonEmpty) {
           val unreserveOp = MesosProtos.Offer.Operation.Unreserve.newBuilder()
-            .addAllResources(withoutDisk)
-            .addAllResources(reservationsForDisks)
+            .addAllResources(withoutDisk.asJava)
+            .addAllResources(reservationsForDisks.asJava)
             .build()
           val op =
             MesosProtos.Offer.Operation.newBuilder()

@@ -9,7 +9,7 @@ import akka.http.scaladsl.unmarshalling.Unmarshaller
 import akka.stream.Materializer
 import akka.stream.scaladsl.Source
 import akka.{ Done, NotUsed }
-import mesosphere.marathon.core.event.EventSubscribers
+import mesosphere.marathon.core.deployment.DeploymentPlan
 import mesosphere.marathon.core.instance.Instance
 import mesosphere.marathon.core.pod.PodDefinition
 import mesosphere.marathon.core.storage.repository._
@@ -17,11 +17,9 @@ import mesosphere.marathon.core.storage.repository.impl.{ PersistenceStoreReposi
 import mesosphere.marathon.core.storage.store.impl.memory.{ Identity, RamId }
 import mesosphere.marathon.core.storage.store.impl.zk.{ ZkId, ZkSerialized }
 import mesosphere.marathon.core.storage.store.{ IdResolver, PersistenceStore }
-import mesosphere.marathon.core.task.Task
-import mesosphere.marathon.metrics.Metrics
 import mesosphere.marathon.state._
-import mesosphere.marathon.upgrade.DeploymentPlan
 import mesosphere.util.state.FrameworkId
+import mesosphere.marathon.raml.RuntimeConfiguration
 
 import scala.async.Async.{ async, await }
 import scala.collection.immutable.Seq
@@ -34,6 +32,8 @@ trait GroupRepository {
   def rootVersions(): Source[OffsetDateTime, NotUsed]
   /** Fetch a previous version of the root */
   def rootVersion(version: OffsetDateTime): Future[Option[RootGroup]]
+  /** Resets cached root group */
+  def invalidateGroupCache(): Future[Done]
 
   /**
     * Store the root, new/updated apps and delete apps. fails if it could not
@@ -43,6 +43,14 @@ trait GroupRepository {
     updatedPods: Seq[PodDefinition], deletedPods: Seq[PathId]): Future[Done]
 
   def storeRootVersion(rootGroup: RootGroup, updatedApps: Seq[AppDefinition], updatedPods: Seq[PodDefinition]): Future[Done]
+
+  def appVersions(id: PathId): Source[OffsetDateTime, NotUsed]
+
+  def appVersion(id: PathId, version: OffsetDateTime): Future[Option[AppDefinition]]
+
+  def podVersions(id: PathId): Source[OffsetDateTime, NotUsed]
+
+  def podVersion(id: PathId, version: OffsetDateTime): Future[Option[PodDefinition]]
 }
 
 object GroupRepository {
@@ -115,8 +123,7 @@ object DeploymentRepository {
     maxVersions: Int)(implicit
     ctx: ExecutionContext,
     actorRefFactory: ActorRefFactory,
-    mat: Materializer,
-    metrics: Metrics): DeploymentRepositoryImpl[ZkId, String, ZkSerialized] = {
+    mat: Materializer): DeploymentRepositoryImpl[ZkId, String, ZkSerialized] = {
     import mesosphere.marathon.storage.store.ZkStoreSerialization._
     new DeploymentRepositoryImpl(persistenceStore, groupRepository, appRepository, podRepository, maxVersions)
   }
@@ -129,29 +136,9 @@ object DeploymentRepository {
     maxVersions: Int)(implicit
     ctx: ExecutionContext,
     actorRefFactory: ActorRefFactory,
-    mat: Materializer,
-    metrics: Metrics): DeploymentRepositoryImpl[RamId, String, Identity] = {
+    mat: Materializer): DeploymentRepositoryImpl[RamId, String, Identity] = {
     import mesosphere.marathon.storage.store.InMemoryStoreSerialization._
     new DeploymentRepositoryImpl(persistenceStore, groupRepository, appRepository, podRepository, maxVersions)
-  }
-}
-
-private[storage] trait TaskRepository extends Repository[Task.Id, Task] {
-  def tasks(appId: PathId): Source[Task.Id, NotUsed] = {
-    ids().filter(_.runSpecId == appId)
-  }
-}
-
-object TaskRepository {
-
-  def zkRepository(persistenceStore: PersistenceStore[ZkId, String, ZkSerialized]): TaskRepository = {
-    import mesosphere.marathon.storage.store.ZkStoreSerialization._
-    new TaskRepositoryImpl(persistenceStore)
-  }
-
-  def inMemRepository(persistenceStore: PersistenceStore[RamId, String, Identity]): TaskRepository = {
-    import mesosphere.marathon.storage.store.InMemoryStoreSerialization._
-    new TaskRepositoryImpl(persistenceStore)
   }
 }
 
@@ -204,31 +191,30 @@ object FrameworkIdRepository {
   }
 }
 
-trait EventSubscribersRepository extends SingletonRepository[EventSubscribers]
+trait RuntimeConfigurationRepository extends SingletonRepository[RuntimeConfiguration]
 
-object EventSubscribersRepository {
-
-  def zkRepository(persistenceStore: PersistenceStore[ZkId, String, ZkSerialized]): EventSubscribersRepository = {
+object RuntimeConfigurationRepository {
+  def zkRepository(persistenceStore: PersistenceStore[ZkId, String, ZkSerialized]): RuntimeConfigurationRepository = {
     import mesosphere.marathon.storage.store.ZkStoreSerialization._
-    new EventSubscribersRepositoryImpl(persistenceStore)
+    new RuntimeConfigurationRepositoryImpl(persistenceStore)
   }
 
-  def inMemRepository(persistenceStore: PersistenceStore[RamId, String, Identity]): EventSubscribersRepository = {
+  def inMemRepository(persistenceStore: PersistenceStore[RamId, String, Identity]): RuntimeConfigurationRepository = {
     import mesosphere.marathon.storage.store.InMemoryStoreSerialization._
-    new EventSubscribersRepositoryImpl(persistenceStore)
+    new RuntimeConfigurationRepositoryImpl(persistenceStore)
   }
 }
 
 class AppRepositoryImpl[K, C, S](persistenceStore: PersistenceStore[K, C, S])(implicit
-  ir: IdResolver[PathId, AppDefinition, C, K],
-  marhaller: Marshaller[AppDefinition, S],
-  unmarshaller: Unmarshaller[S, AppDefinition],
-  ctx: ExecutionContext)
-    extends PersistenceStoreVersionedRepository[PathId, AppDefinition, K, C, S](
-      persistenceStore,
-      _.id,
-      _.version.toOffsetDateTime)
-    with AppRepository {
+    ir: IdResolver[PathId, AppDefinition, C, K],
+    marhaller: Marshaller[AppDefinition, S],
+    unmarshaller: Unmarshaller[S, AppDefinition],
+    ctx: ExecutionContext)
+  extends PersistenceStoreVersionedRepository[PathId, AppDefinition, K, C, S](
+    persistenceStore,
+    _.id,
+    _.version.toOffsetDateTime)
+  with AppRepository {
 
   private[storage] var beforeStore = Option.empty[(PathId, Option[OffsetDateTime]) => Future[Done]]
 
@@ -258,15 +244,15 @@ class AppRepositoryImpl[K, C, S](persistenceStore: PersistenceStore[K, C, S])(im
 }
 
 class PodRepositoryImpl[K, C, S](persistenceStore: PersistenceStore[K, C, S])(implicit
-  ir: IdResolver[PathId, PodDefinition, C, K],
-  marshaller: Marshaller[PodDefinition, S],
-  unmarshaller: Unmarshaller[S, PodDefinition],
-  ctx: ExecutionContext)
-    extends PersistenceStoreVersionedRepository[PathId, PodDefinition, K, C, S](
-      persistenceStore,
-      _.id,
-      _.version.toOffsetDateTime
-    ) with PodRepository {
+    ir: IdResolver[PathId, PodDefinition, C, K],
+    marshaller: Marshaller[PodDefinition, S],
+    unmarshaller: Unmarshaller[S, PodDefinition],
+    ctx: ExecutionContext)
+  extends PersistenceStoreVersionedRepository[PathId, PodDefinition, K, C, S](
+    persistenceStore,
+    _.id,
+    _.version.toOffsetDateTime
+  ) with PodRepository {
   private[storage] var beforeStore = Option.empty[(PathId, Option[OffsetDateTime]) => Future[Done]]
 
   @SuppressWarnings(Array("all")) // async/await
@@ -294,25 +280,18 @@ class PodRepositoryImpl[K, C, S](persistenceStore: PersistenceStore[K, C, S])(im
   }
 }
 
-class TaskRepositoryImpl[K, C, S](persistenceStore: PersistenceStore[K, C, S])(implicit
-  ir: IdResolver[Task.Id, Task, C, K],
-  marshaller: Marshaller[Task, S],
-  unmarshaller: Unmarshaller[S, Task])
-    extends PersistenceStoreRepository[Task.Id, Task, K, C, S](persistenceStore, _.taskId)
-    with TaskRepository
-
 class InstanceRepositoryImpl[K, C, S](persistenceStore: PersistenceStore[K, C, S])(implicit
-  ir: IdResolver[Instance.Id, Instance, C, K],
-  marshaller: Marshaller[Instance, S],
-  unmarshaller: Unmarshaller[S, Instance])
-    extends PersistenceStoreRepository[Instance.Id, Instance, K, C, S](persistenceStore, _.instanceId)
-    with InstanceRepository
+    ir: IdResolver[Instance.Id, Instance, C, K],
+    marshaller: Marshaller[Instance, S],
+    unmarshaller: Unmarshaller[S, Instance])
+  extends PersistenceStoreRepository[Instance.Id, Instance, K, C, S](persistenceStore, _.instanceId)
+  with InstanceRepository
 
 class TaskFailureRepositoryImpl[K, C, S](persistenceStore: PersistenceStore[K, C, S])(
-  implicit
-  ir: IdResolver[PathId, TaskFailure, C, K],
-  marshaller: Marshaller[TaskFailure, S],
-  unmarshaller: Unmarshaller[S, TaskFailure]
+    implicit
+    ir: IdResolver[PathId, TaskFailure, C, K],
+    marshaller: Marshaller[TaskFailure, S],
+    unmarshaller: Unmarshaller[S, TaskFailure]
 ) extends PersistenceStoreVersionedRepository[PathId, TaskFailure, K, C, S](
   persistenceStore,
   _.appId,
@@ -331,15 +310,15 @@ class FrameworkIdRepositoryImpl[K, C, S](persistenceStore: PersistenceStore[K, C
   override def delete(): Future[Done] = repo.delete(ID)
 }
 
-class EventSubscribersRepositoryImpl[K, C, S](persistenceStore: PersistenceStore[K, C, S])(
+class RuntimeConfigurationRepositoryImpl[K, C, S](persistenceStore: PersistenceStore[K, C, S])(
     implicit
-    ir: IdResolver[String, EventSubscribers, C, K],
-    marshaller: Marshaller[EventSubscribers, S],
-    unmarshaller: Unmarshaller[S, EventSubscribers]
-) extends EventSubscribersRepository {
+    ir: IdResolver[String, RuntimeConfiguration, C, K],
+    marshaller: Marshaller[RuntimeConfiguration, S],
+    unmarshaller: Unmarshaller[S, RuntimeConfiguration]
+) extends RuntimeConfigurationRepository {
   private val ID = "id"
-  private val repo = new PersistenceStoreRepository[String, EventSubscribers, K, C, S](persistenceStore, _ => ID)
-  override def get(): Future[Option[EventSubscribers]] = repo.get(ID)
-  override def store(v: EventSubscribers): Future[Done] = repo.store(v)
+  private val repo = new PersistenceStoreRepository[String, RuntimeConfiguration, K, C, S](persistenceStore, _ => ID)
+  override def get(): Future[Option[RuntimeConfiguration]] = repo.get(ID)
+  override def store(v: RuntimeConfiguration): Future[Done] = repo.store(v)
   override def delete(): Future[Done] = repo.delete(ID)
 }

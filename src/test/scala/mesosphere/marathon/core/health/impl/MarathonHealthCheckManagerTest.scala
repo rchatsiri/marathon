@@ -2,11 +2,8 @@ package mesosphere.marathon
 package core.health.impl
 
 import akka.event.EventStream
-import akka.testkit.EventFilter
-import com.codahale.metrics.MetricRegistry
 import com.typesafe.config.{ Config, ConfigFactory }
 import mesosphere.AkkaUnitTest
-import mesosphere.marathon.core.base.ConstantClock
 import mesosphere.marathon.core.group.GroupManager
 import mesosphere.marathon.core.health.{ Health, HealthCheck, MesosCommandHealthCheck }
 import mesosphere.marathon.core.instance.update.InstanceUpdateOperation
@@ -14,34 +11,31 @@ import mesosphere.marathon.core.instance.{ Instance, TestInstanceBuilder, TestTa
 import mesosphere.marathon.core.leadership.{ AlwaysElectedLeadershipModule, LeadershipModule }
 import mesosphere.marathon.core.task.Task
 import mesosphere.marathon.core.task.termination.KillService
-import mesosphere.marathon.core.task.tracker.{ InstanceCreationHandler, InstanceTracker, InstanceTrackerModule, TaskStateOpProcessor }
-import mesosphere.marathon.metrics.Metrics
+import mesosphere.marathon.core.task.tracker.{ InstanceTracker, InstanceTrackerModule, InstanceStateOpProcessor }
 import mesosphere.marathon.state.PathId.StringPathId
 import mesosphere.marathon.state._
-import mesosphere.marathon.test.{ CaptureEvents, MarathonShutdownHookSupport, MarathonTestHelper }
+import mesosphere.marathon.test.{ CaptureEvents, MarathonTestHelper, SettableClock }
 import org.apache.mesos.{ Protos => mesos }
-import org.scalatest.time.{ Millis, Span }
+import org.scalatest.concurrent.Eventually
 
 import scala.collection.immutable.Set
 import scala.concurrent.Future
 import scala.concurrent.duration._
 
-class MarathonHealthCheckManagerTest extends AkkaUnitTest with MarathonShutdownHookSupport {
+class MarathonHealthCheckManagerTest extends AkkaUnitTest with Eventually {
 
   override protected lazy val akkaConfig: Config = ConfigFactory.parseString(
     """akka.loggers = ["akka.testkit.TestEventListener"]"""
   )
 
   private val appId = "test".toRootPath
-  private val clock = ConstantClock()
+  private val clock = new SettableClock()
 
   case class Fixture() {
-    implicit val metrics: Metrics = new Metrics(new MetricRegistry)
-    val leadershipModule: LeadershipModule = AlwaysElectedLeadershipModule(shutdownHooks)
+    val leadershipModule: LeadershipModule = AlwaysElectedLeadershipModule.forRefFactory(system)
     val taskTrackerModule: InstanceTrackerModule = MarathonTestHelper.createTaskTrackerModule(leadershipModule)
     val taskTracker: InstanceTracker = taskTrackerModule.instanceTracker
-    implicit val taskCreationHandler: InstanceCreationHandler = taskTrackerModule.instanceCreationHandler
-    implicit val stateOpProcessor: TaskStateOpProcessor = taskTrackerModule.stateOpProcessor
+    implicit val stateOpProcessor: InstanceStateOpProcessor = taskTrackerModule.stateOpProcessor
     val groupManager: GroupManager = mock[GroupManager]
     implicit val eventStream: EventStream = new EventStream(system)
     val killService: KillService = mock[KillService]
@@ -54,13 +48,13 @@ class MarathonHealthCheckManagerTest extends AkkaUnitTest with MarathonShutdownH
     )
   }
 
-  def makeRunningTask(appId: PathId, version: Timestamp)(implicit taskCreationHandler: InstanceCreationHandler, stateOpProcessor: TaskStateOpProcessor): (Instance.Id, Task.Id) = {
+  def makeRunningTask(appId: PathId, version: Timestamp)(implicit stateOpProcessor: InstanceStateOpProcessor): (Instance.Id, Task.Id) = {
     val instance = TestInstanceBuilder.newBuilder(appId, version = version).addTaskStaged().getInstance()
     val (taskId, _) = instance.tasksMap.head
     val taskStatus = TestTaskBuilder.Helper.runningTask(taskId).status.mesosStatus.get
     val update = InstanceUpdateOperation.MesosUpdate(instance, taskStatus, clock.now())
 
-    taskCreationHandler.created(InstanceUpdateOperation.LaunchEphemeral(instance)).futureValue
+    stateOpProcessor.process(InstanceUpdateOperation.LaunchEphemeral(instance)).futureValue
     stateOpProcessor.process(update).futureValue
 
     (instance.instanceId, taskId)
@@ -73,13 +67,11 @@ class MarathonHealthCheckManagerTest extends AkkaUnitTest with MarathonShutdownH
       .setHealthy(healthy)
       .build
 
-    EventFilter.info(start = "Received health result for app", occurrences = 1).intercept {
-      hcManager.update(taskStatus, version)
-    }
+    hcManager.update(taskStatus, version)
   }
 
   "HealthCheckManager" should {
-    "Add for a known app" in new Fixture {
+    "add for a known app" in new Fixture {
       val app: AppDefinition = AppDefinition(id = appId)
 
       val healthCheck = MesosCommandHealthCheck(gracePeriod = 0.seconds, command = Command("true"))
@@ -87,7 +79,7 @@ class MarathonHealthCheckManagerTest extends AkkaUnitTest with MarathonShutdownH
       assert(hcManager.list(appId).size == 1)
     }
 
-    "Add for not-yet-known app" in new Fixture {
+    "add for not-yet-known app" in new Fixture {
       val app: AppDefinition = AppDefinition(id = appId)
 
       val healthCheck = MesosCommandHealthCheck(gracePeriod = 0.seconds, command = Command("true"))
@@ -95,7 +87,7 @@ class MarathonHealthCheckManagerTest extends AkkaUnitTest with MarathonShutdownH
       assert(hcManager.list(appId).size == 1)
     }
 
-    "Update" in new Fixture {
+    "update" in new Fixture {
       val app: AppDefinition = AppDefinition(id = appId, versionInfo = VersionInfo.NoVersion)
 
       val instance = TestInstanceBuilder.newBuilder(appId).addTaskStaged().getInstance()
@@ -106,7 +98,7 @@ class MarathonHealthCheckManagerTest extends AkkaUnitTest with MarathonShutdownH
 
       val healthCheck = MesosCommandHealthCheck(gracePeriod = 0.seconds, command = Command("true"))
 
-      taskCreationHandler.created(InstanceUpdateOperation.LaunchEphemeral(instance)).futureValue
+      stateOpProcessor.process(InstanceUpdateOperation.LaunchEphemeral(instance)).futureValue
       stateOpProcessor.process(update).futureValue
 
       hcManager.add(app, healthCheck, Seq.empty)
@@ -115,23 +107,23 @@ class MarathonHealthCheckManagerTest extends AkkaUnitTest with MarathonShutdownH
       assert(status1 == Seq(Health(instanceId)))
 
       // send unhealthy task status
-      EventFilter.info(start = "Received health result for app", occurrences = 1).intercept {
-        hcManager.update(taskStatus.toBuilder.setHealthy(false).build, app.version)
-      }
+      hcManager.update(taskStatus.toBuilder.setHealthy(false).build, app.version)
 
-      val Seq(health2) = hcManager.status(appId, instanceId).futureValue
-      assert(health2.lastFailure.isDefined)
-      assert(health2.lastSuccess.isEmpty)
+      eventually {
+        val Seq(health2) = hcManager.status(appId, instanceId).futureValue
+        assert(health2.lastFailure.isDefined)
+        assert(health2.lastSuccess.isEmpty)
+      }
 
       // send healthy task status
-      EventFilter.info(start = "Received health result for app", occurrences = 1).intercept {
-        hcManager.update(taskStatus.toBuilder.setHealthy(true).build, app.version)
-      }
+      hcManager.update(taskStatus.toBuilder.setHealthy(true).build, app.version)
 
-      val Seq(health3) = hcManager.status(appId, instanceId).futureValue
-      assert(health3.lastFailure.isDefined)
-      assert(health3.lastSuccess.isDefined)
-      assert(health3.lastSuccess > health3.lastFailure)
+      eventually {
+        val Seq(health3) = hcManager.status(appId, instanceId).futureValue
+        assert(health3.lastFailure.isDefined)
+        assert(health3.lastSuccess.isDefined)
+        assert(health3.lastSuccess > health3.lastFailure)
+      }
     }
 
     "statuses" in new Fixture {
@@ -152,40 +144,48 @@ class MarathonHealthCheckManagerTest extends AkkaUnitTest with MarathonShutdownH
       }
 
       updateTaskHealth(taskId1, version, healthy = true)
-      statuses.foreach {
-        case (id, health) if id == instanceId1 =>
-          assert(health.size == 1)
-          assert(health.head.alive)
-        case (_, health) => assert(health.isEmpty)
+      eventually {
+        statuses.foreach {
+          case (id, health) if id == instanceId1 =>
+            assert(health.size == 1)
+            assert(health.head.alive)
+          case (_, health) => assert(health.isEmpty)
+        }
       }
 
       updateTaskHealth(taskId2, version, healthy = true)
-      statuses.foreach {
-        case (id, health) if id == instanceId3 =>
-          assert(health.isEmpty)
-        case (_, health) =>
-          assert(health.size == 1)
-          assert(health.head.alive)
+      eventually {
+        statuses.foreach {
+          case (id, health) if id == instanceId3 =>
+            assert(health.isEmpty)
+          case (_, health) =>
+            assert(health.size == 1)
+            assert(health.head.alive)
+        }
       }
 
       updateTaskHealth(taskId3, version, healthy = false)
-      statuses.foreach {
-        case (id, health) if id == instanceId3 =>
-          assert(health.size == 1)
-          assert(!health.head.alive)
-        case (_, health) =>
-          assert(health.size == 1)
-          assert(health.head.alive)
+      eventually {
+        statuses.foreach {
+          case (id, health) if id == instanceId3 =>
+            assert(health.size == 1)
+            assert(!health.head.alive)
+          case (_, health) =>
+            assert(health.size == 1)
+            assert(health.head.alive)
+        }
       }
 
       updateTaskHealth(taskId1, version, healthy = false)
-      statuses.foreach {
-        case (id, health) if id == instanceId2 =>
-          assert(health.size == 1)
-          assert(health.head.alive)
-        case (_, health) =>
-          assert(health.size == 1)
-          assert(!health.head.alive)
+      eventually {
+        statuses.foreach {
+          case (id, health) if id == instanceId2 =>
+            assert(health.size == 1)
+            assert(health.head.alive)
+          case (_, health) =>
+            assert(health.size == 1)
+            assert(!health.head.alive)
+        }
       }
     }
 
@@ -200,7 +200,10 @@ class MarathonHealthCheckManagerTest extends AkkaUnitTest with MarathonShutdownH
           .build
 
       val healthChecks = List(0, 1, 2).map { i =>
-        (0 until i).map { j => MesosCommandHealthCheck(gracePeriod = (i * 3 + j).seconds, command = Command("true")) }.toSet
+        (0 until i).map { j =>
+          val check: HealthCheck = MesosCommandHealthCheck(gracePeriod = (i * 3 + j).seconds, command = Command("true"))
+          check
+        }.to[Set]
       }
       val versions = List(0L, 1L, 2L).map {
         Timestamp(_)
@@ -209,13 +212,13 @@ class MarathonHealthCheckManagerTest extends AkkaUnitTest with MarathonShutdownH
         TestInstanceBuilder.newBuilder(appId, version = versions(i)).addTaskStaged(version = Some(versions(i))).getInstance()
       }
 
-      def startTask(appId: PathId, instance: Instance, version: Timestamp, healthChecks: Set[_ <: HealthCheck]): AppDefinition = {
+      def startTask(appId: PathId, instance: Instance, version: Timestamp, healthChecks: Set[HealthCheck]): AppDefinition = {
         val app = AppDefinition(
           id = appId,
           versionInfo = VersionInfo.forNewConfig(version),
           healthChecks = healthChecks
         )
-        taskCreationHandler.created(InstanceUpdateOperation.LaunchEphemeral(instance)).futureValue
+        stateOpProcessor.process(InstanceUpdateOperation.LaunchEphemeral(instance)).futureValue
         val update = InstanceUpdateOperation.MesosUpdate(instance, taskStatus(instance), clock.now())
         stateOpProcessor.process(update).futureValue
         app
@@ -224,12 +227,12 @@ class MarathonHealthCheckManagerTest extends AkkaUnitTest with MarathonShutdownH
       def startTask_i(i: Int): AppDefinition = startTask(appId, instances(i), versions(i), healthChecks(i))
 
       def stopTask(instance: Instance) =
-        taskCreationHandler.terminated(InstanceUpdateOperation.ForceExpunge(instance.instanceId)).futureValue
+        stateOpProcessor.process(InstanceUpdateOperation.ForceExpunge(instance.instanceId)).futureValue
 
       // one other task of another app
       val otherAppId = "other".toRootPath
       val otherInstance = TestInstanceBuilder.newBuilder(appId).addTaskStaged(version = Some(Timestamp.zero)).getInstance()
-      val otherHealthChecks = Set(MesosCommandHealthCheck(gracePeriod = 0.seconds, command = Command("true")))
+      val otherHealthChecks = Set[HealthCheck](MesosCommandHealthCheck(gracePeriod = 0.seconds, command = Command("true")))
       val otherApp = startTask(otherAppId, otherInstance, Timestamp(42), otherHealthChecks)
 
       hcManager.addAllFor(otherApp, Seq.empty)
@@ -300,7 +303,7 @@ class MarathonHealthCheckManagerTest extends AkkaUnitTest with MarathonShutdownH
       val instance: Instance = TestInstanceBuilder.newBuilder(appId, version = app.version).addTaskStaged().getInstance()
       val instanceId = instance.instanceId
       val (taskId, _) = instance.tasksMap.head
-      taskCreationHandler.created(InstanceUpdateOperation.LaunchEphemeral(instance)).futureValue
+      stateOpProcessor.process(InstanceUpdateOperation.LaunchEphemeral(instance)).futureValue
 
       // Send an unhealthy update
       val taskStatus = TestTaskBuilder.Helper.unhealthyTask(taskId).status.mesosStatus.get
@@ -319,6 +322,4 @@ class MarathonHealthCheckManagerTest extends AkkaUnitTest with MarathonShutdownH
     }
   }
   def captureEvents(implicit eventStream: EventStream) = new CaptureEvents(eventStream)
-
-  override implicit def patienceConfig: PatienceConfig = PatienceConfig(timeout = scaled(Span(1000, Millis)))
 }

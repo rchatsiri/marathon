@@ -7,13 +7,13 @@ import mesosphere.marathon.core.appinfo.EnrichedTask
 import mesosphere.marathon.core.instance.{ Instance, TestInstanceBuilder }
 import mesosphere.marathon.core.task.Task
 import mesosphere.marathon.core.task.state.NetworkInfo
+import mesosphere.marathon.raml.AnyToRaml
+import mesosphere.marathon.raml.TaskConversion._
 import mesosphere.marathon.state.{ AppDefinition, PathId, Timestamp }
 import mesosphere.marathon.stream.Implicits._
 import org.apache.mesos.{ Protos => MesosProtos }
 
 class EnrichedTaskWritesTest extends UnitTest {
-
-  import Formats.EnrichedTaskWrites
 
   class Fixture {
     val time = Timestamp(1024)
@@ -22,7 +22,7 @@ class EnrichedTaskWritesTest extends UnitTest {
     val runSpecId = runSpec.id
     val hostName = "agent1.mesos"
     val agentId = "abcd-1234"
-    val agentInfo = Instance.AgentInfo(hostName, Some(agentId), attributes = Seq.empty)
+    val agentInfo = Instance.AgentInfo(hostName, Some(agentId), None, None, attributes = Seq.empty)
 
     val networkInfos = Seq(
       MesosProtos.NetworkInfo.newBuilder()
@@ -44,7 +44,7 @@ class EnrichedTaskWritesTest extends UnitTest {
         .setTaskId(taskId.mesosTaskId)
         .setState(MesosProtos.TaskState.TASK_STAGING)
         .setContainerStatus(
-          MesosProtos.ContainerStatus.newBuilder().addAllNetworkInfos(networkInfos)
+          MesosProtos.ContainerStatus.newBuilder().addAllNetworkInfos(networkInfos.asJava)
         ).build
     }
 
@@ -77,17 +77,20 @@ class EnrichedTaskWritesTest extends UnitTest {
         s"""
         |{
         |  "appId": "${f.runSpecId}",
+        |  "healthCheckResults" : [],
         |  "id": "${f.taskWithoutIp.task.taskId.idString}",
+        |  "ipAddresses" : [],
         |  "host": "agent1.mesos",
         |  "state": "TASK_STAGING",
         |  "ports": [],
-        |  "startedAt": null,
+        |  "servicePorts" : [],
         |  "stagedAt": "1970-01-01T00:00:01.024Z",
         |  "version": "1970-01-01T00:00:01.024Z",
-        |  "slaveId": "abcd-1234"
+        |  "slaveId": "abcd-1234",
+        |  "localVolumes" : []
         |}
       """.stripMargin
-      JsonTestHelper.assertThatJsonOf(f.taskWithoutIp).correspondsToJsonString(json)
+      JsonTestHelper.assertThatJsonOf(f.taskWithoutIp.toRaml).correspondsToJsonString(json)
     }
 
     "JSON serialization of a Task with multiple IPs" in {
@@ -96,6 +99,7 @@ class EnrichedTaskWritesTest extends UnitTest {
         s"""
         |{
         |  "appId": "${f.runSpecId}",
+        |  "healthCheckResults" : [],
         |  "id": "${f.taskWithMultipleIPs.task.taskId.idString}",
         |  "host": "agent1.mesos",
         |  "state": "TASK_STAGING",
@@ -110,13 +114,14 @@ class EnrichedTaskWritesTest extends UnitTest {
         |    }
         |  ],
         |  "ports": [],
-        |  "startedAt": null,
+        |  "servicePorts" : [],
         |  "stagedAt": "1970-01-01T00:00:01.024Z",
         |  "version": "1970-01-01T00:00:01.024Z",
-        |  "slaveId": "abcd-1234"
+        |  "slaveId": "abcd-1234",
+        |  "localVolumes" : []
         |}
       """.stripMargin
-      JsonTestHelper.assertThatJsonOf(f.taskWithMultipleIPs).correspondsToJsonString(json)
+      JsonTestHelper.assertThatJsonOf(f.taskWithMultipleIPs.toRaml).correspondsToJsonString(json)
     }
 
     "JSON serialization of a Task with reserved local volumes" in {
@@ -128,10 +133,13 @@ class EnrichedTaskWritesTest extends UnitTest {
         s"""
         |{
         |  "appId": "${f.runSpecId}",
+        |  "healthCheckResults" : [],
         |  "id": "${task.taskId.idString}",
+        |  "ipAddresses" : [],
         |  "host": "agent1.mesos",
         |  "state" : "TASK_RUNNING",
         |  "ports": [],
+        |  "servicePorts" : [],
         |  "startedAt": "${status.startedAt.value.toString}",
         |  "stagedAt": "${status.stagedAt.toString}",
         |  "version": "${task.runSpecVersion}",
@@ -146,8 +154,7 @@ class EnrichedTaskWritesTest extends UnitTest {
         |  ]
         |}
       """.stripMargin
-      JsonTestHelper.assertThatJsonOf(f.taskWithLocalVolumes).correspondsToJsonString(json)
+      JsonTestHelper.assertThatJsonOf(f.taskWithLocalVolumes.toRaml).correspondsToJsonString(json)
     }
-
   }
 }

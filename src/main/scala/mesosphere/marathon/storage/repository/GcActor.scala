@@ -7,13 +7,13 @@ import akka.Done
 import akka.actor.{ ActorRef, ActorRefFactory, FSM, LoggingFSM, Props }
 import akka.pattern._
 import akka.stream.Materializer
-import mesosphere.marathon.metrics.Metrics
-import mesosphere.marathon.state.{ RootGroup, PathId }
-import mesosphere.marathon.storage.repository.GcActor.CompactDone
+import com.typesafe.scalalogging.StrictLogging
+import kamon.Kamon
+import kamon.metric.instrument.Time
+import mesosphere.marathon.core.deployment.DeploymentPlan
+import mesosphere.marathon.state.{ PathId, RootGroup }
+import mesosphere.marathon.storage.repository.GcActor.{ CompactDone, _ }
 import mesosphere.marathon.stream.Sink
-import mesosphere.marathon.upgrade.DeploymentPlan
-import mesosphere.marathon.storage.repository.GcActor._
-import org.slf4j.LoggerFactory
 
 import scala.async.Async.{ async, await }
 import scala.collection.{ SortedSet, mutable }
@@ -63,18 +63,19 @@ import scala.util.control.NonFatal
   *   more additional GC Requests were sent to the actor.
   */
 private[storage] class GcActor[K, C, S](
-  val deploymentRepository: DeploymentRepositoryImpl[K, C, S],
-  val groupRepository: StoredGroupRepositoryImpl[K, C, S],
-  val appRepository: AppRepositoryImpl[K, C, S],
-  val podRepository: PodRepositoryImpl[K, C, S],
-  val maxVersions: Int)(implicit val mat: Materializer, val ctx: ExecutionContext, metrics: Metrics)
-    extends FSM[State, Data] with LoggingFSM[State, Data] with ScanBehavior[K, C, S] with CompactBehavior[K, C, S] {
+    val deploymentRepository: DeploymentRepositoryImpl[K, C, S],
+    val groupRepository: StoredGroupRepositoryImpl[K, C, S],
+    val appRepository: AppRepositoryImpl[K, C, S],
+    val podRepository: PodRepositoryImpl[K, C, S],
+    val maxVersions: Int)(implicit val mat: Materializer, val ctx: ExecutionContext)
+  extends FSM[State, Data] with LoggingFSM[State, Data] with ScanBehavior[K, C, S] with CompactBehavior[K, C, S] {
 
-  private var totalGcs = metrics.counter("GarbageCollector.totalGcs")
+  // We already released metrics with these names, so we can't use the Metrics.* methods
+  private val totalGcs = Kamon.metrics.counter("GarbageCollector.totalGcs")
   private var lastScanStart = Instant.now()
-  private var scanTime = metrics.histogram("GarbageCollector.scanTime")
+  private val scanTime = Kamon.metrics.histogram("GarbageCollector.scanTime", Time.Milliseconds)
   private var lastCompactStart = Instant.now()
-  private var compactTime = metrics.histogram("GarbageCollector.compactTime")
+  private val compactTime = Kamon.metrics.histogram("GarbageCollector.compactTime", Time.Milliseconds)
 
   startWith(Idle, IdleData)
 
@@ -97,28 +98,28 @@ private[storage] class GcActor[K, C, S](
       lastCompactStart = Instant.now()
       val scanDuration = Duration.between(lastScanStart, lastCompactStart)
       log.info(s"Completed scan phase in $scanDuration")
-      scanTime.update(scanDuration.toMillis)
+      scanTime.record(scanDuration.toMillis)
     case Scanning -> Idle =>
       val scanDuration = Duration.between(lastScanStart, Instant.now)
       log.info(s"Completed empty scan in $scanDuration")
-      scanTime.update(scanDuration.toMillis)
+      scanTime.record(scanDuration.toMillis)
     case Compacting -> Idle =>
       val compactDuration = Duration.between(lastCompactStart, Instant.now)
       log.info(s"Completed compaction in $compactDuration")
-      compactTime.update(compactDuration.toMillis)
-      totalGcs.inc()
+      compactTime.record(compactDuration.toMillis)
+      totalGcs.increment()
     case Compacting -> Scanning =>
       lastScanStart = Instant.now()
       val compactDuration = Duration.between(lastCompactStart, Instant.now)
       log.info(s"Completed compaction in $compactDuration")
-      compactTime.update(compactDuration.toMillis)
-      totalGcs.inc()
+      compactTime.record(compactDuration.toMillis)
+      totalGcs.increment()
   }
 
   initialize()
 }
 
-private[storage] trait ScanBehavior[K, C, S] { this: FSM[State, Data] with CompactBehavior[K, C, S] =>
+private[storage] trait ScanBehavior[K, C, S] extends StrictLogging { this: FSM[State, Data] with CompactBehavior[K, C, S] =>
   implicit val mat: Materializer
   implicit val ctx: ExecutionContext
   val maxVersions: Int
@@ -127,8 +128,6 @@ private[storage] trait ScanBehavior[K, C, S] { this: FSM[State, Data] with Compa
   val groupRepository: StoredGroupRepositoryImpl[K, C, S]
   val deploymentRepository: DeploymentRepositoryImpl[K, C, S]
   val self: ActorRef
-  // a val named "log" would conflict with LoggingFSM
-  private[this] val logger = LoggerFactory.getLogger(getClass)
 
   when(Scanning) {
     case Event(RunGC, updates: UpdatedEntities) =>
@@ -175,10 +174,10 @@ private[storage] trait ScanBehavior[K, C, S] { this: FSM[State, Data] with Compa
       promise.success(Done)
       val originalUpdates =
         addAppVersions(
-          plan.original.transitiveAppsById.map { case (id, app) => id -> app.version.toOffsetDateTime },
+          plan.original.transitiveApps.map(app => app.id -> app.version.toOffsetDateTime)(collection.breakOut),
           updates.appVersionsStored)
       val allUpdates =
-        addAppVersions(plan.target.transitiveAppsById.map { case (id, app) => id -> app.version.toOffsetDateTime }, originalUpdates)
+        addAppVersions(plan.target.transitiveApps.map(app => app.id -> app.version.toOffsetDateTime)(collection.breakOut), originalUpdates)
       val newRootsStored = updates.rootsStored ++
         Set(plan.original.version.toOffsetDateTime, plan.target.version.toOffsetDateTime)
       stay using updates.copy(appVersionsStored = allUpdates, rootsStored = newRootsStored)
@@ -266,9 +265,8 @@ private[storage] trait ScanBehavior[K, C, S] { this: FSM[State, Data] with Compa
 
     def appsInUse(roots: Seq[StoredGroup]): Map[PathId, Set[OffsetDateTime]] = {
       val appVersionsInUse = new mutable.HashMap[PathId, mutable.Set[OffsetDateTime]] with mutable.MultiMap[PathId, OffsetDateTime]
-      currentRoot.transitiveAppsById.foreach {
-        case (id, app) =>
-          appVersionsInUse.addBinding(id, app.version.toOffsetDateTime)
+      currentRoot.transitiveApps.foreach { app =>
+        appVersionsInUse.addBinding(app.id, app.version.toOffsetDateTime)
       }
       roots.foreach { root =>
         root.transitiveAppIds.foreach {
@@ -281,9 +279,8 @@ private[storage] trait ScanBehavior[K, C, S] { this: FSM[State, Data] with Compa
 
     def podsInUse(roots: Seq[StoredGroup]): Map[PathId, Set[OffsetDateTime]] = {
       val podVersionsInUse = new mutable.HashMap[PathId, mutable.Set[OffsetDateTime]] with mutable.MultiMap[PathId, OffsetDateTime]
-      currentRoot.transitivePodsById.foreach {
-        case (id, pod) =>
-          podVersionsInUse.addBinding(id, pod.version.toOffsetDateTime)
+      currentRoot.transitivePods.foreach { pod =>
+        podVersionsInUse.addBinding(pod.id, pod.version.toOffsetDateTime)
       }
       roots.foreach { root =>
         root.transitivePodIds.foreach {
@@ -356,14 +353,12 @@ private[storage] trait ScanBehavior[K, C, S] { this: FSM[State, Data] with Compa
   }
 }
 
-private[storage] trait CompactBehavior[K, C, S] { this: FSM[State, Data] with ScanBehavior[K, C, S] =>
+private[storage] trait CompactBehavior[K, C, S] extends StrictLogging { this: FSM[State, Data] with ScanBehavior[K, C, S] =>
   val maxVersions: Int
   val appRepository: AppRepositoryImpl[K, C, S]
   val podRepository: PodRepositoryImpl[K, C, S]
   val groupRepository: StoredGroupRepositoryImpl[K, C, S]
   val self: ActorRef
-  // a val named "log" would conflict with LoggingFSM
-  private[this] val logger = LoggerFactory.getLogger(getClass)
 
   when(Compacting) {
     case Event(RunGC, blocked: BlockedEntities) =>
@@ -483,27 +478,27 @@ object GcActor {
   private[storage] sealed trait Data extends Product with Serializable
   case object IdleData extends Data
   case class UpdatedEntities(
-    appsStored: Set[PathId] = Set.empty,
-    appVersionsStored: Map[PathId, Set[OffsetDateTime]] = Map.empty.withDefaultValue(Set.empty),
-    podsStored: Set[PathId] = Set.empty,
-    podVersionsStored: Map[PathId, Set[OffsetDateTime]] = Map.empty.withDefaultValue(Set.empty),
-    rootsStored: Set[OffsetDateTime] = Set.empty,
-    gcRequested: Boolean = false) extends Data
+      appsStored: Set[PathId] = Set.empty,
+      appVersionsStored: Map[PathId, Set[OffsetDateTime]] = Map.empty.withDefaultValue(Set.empty),
+      podsStored: Set[PathId] = Set.empty,
+      podVersionsStored: Map[PathId, Set[OffsetDateTime]] = Map.empty.withDefaultValue(Set.empty),
+      rootsStored: Set[OffsetDateTime] = Set.empty,
+      gcRequested: Boolean = false) extends Data
   case class BlockedEntities(
-    appsDeleting: Set[PathId] = Set.empty,
-    appVersionsDeleting: Map[PathId, Set[OffsetDateTime]] = Map.empty.withDefaultValue(Set.empty),
-    podsDeleting: Set[PathId] = Set.empty,
-    podVersionsDeleting: Map[PathId, Set[OffsetDateTime]] = Map.empty.withDefaultValue(Set.empty),
-    rootsDeleting: Set[OffsetDateTime] = Set.empty,
-    promises: List[Promise[Done]] = List.empty,
-    gcRequested: Boolean = false) extends Data
+      appsDeleting: Set[PathId] = Set.empty,
+      appVersionsDeleting: Map[PathId, Set[OffsetDateTime]] = Map.empty.withDefaultValue(Set.empty),
+      podsDeleting: Set[PathId] = Set.empty,
+      podVersionsDeleting: Map[PathId, Set[OffsetDateTime]] = Map.empty.withDefaultValue(Set.empty),
+      rootsDeleting: Set[OffsetDateTime] = Set.empty,
+      promises: List[Promise[Done]] = List.empty,
+      gcRequested: Boolean = false) extends Data
 
   def props[K, C, S](
     deploymentRepository: DeploymentRepositoryImpl[K, C, S],
     groupRepository: StoredGroupRepositoryImpl[K, C, S],
     appRepository: AppRepositoryImpl[K, C, S],
     podRepository: PodRepositoryImpl[K, C, S],
-    maxVersions: Int)(implicit mat: Materializer, ctx: ExecutionContext, metrics: Metrics): Props = {
+    maxVersions: Int)(implicit mat: Materializer, ctx: ExecutionContext): Props = {
     Props(new GcActor[K, C, S](deploymentRepository, groupRepository, appRepository, podRepository, maxVersions))
   }
 
@@ -516,7 +511,7 @@ object GcActor {
     maxVersions: Int)(implicit
     mat: Materializer,
     ctx: ExecutionContext,
-    actorRefFactory: ActorRefFactory, metrics: Metrics): ActorRef = {
+    actorRefFactory: ActorRefFactory): ActorRef = {
     actorRefFactory.actorOf(props(deploymentRepository, groupRepository,
       appRepository, podRepository, maxVersions), name)
   }

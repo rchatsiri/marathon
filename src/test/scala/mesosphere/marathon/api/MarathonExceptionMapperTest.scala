@@ -5,8 +5,8 @@ import com.fasterxml.jackson.core.JsonParseException
 import com.fasterxml.jackson.databind.JsonMappingException
 import mesosphere.UnitTest
 import mesosphere.marathon.api.v2.Validation._
-import mesosphere.marathon.api.v2.json.Formats._
 import mesosphere.marathon.core.plugin.PluginManager
+import mesosphere.marathon.raml.App
 import mesosphere.marathon.state.{ AppDefinition, PathId }
 import play.api.libs.json.{ JsObject, JsResultException, Json }
 
@@ -16,14 +16,14 @@ class MarathonExceptionMapperTest extends UnitTest {
   "MarathonExceptionMapper" should {
     "Render js result exception correctly" in {
       Given("A JsResultException, from an invalid json to object Reads")
-      val ex = intercept[JsResultException] { Json.parse("""{"id":123}""").as[AppDefinition] }
+      val ex = intercept[JsResultException] { Json.parse("""{"id":123}""").as[App] }
       val mapper = new MarathonExceptionMapper()
 
       When("The mapper creates a response from this exception")
       val response = mapper.toResponse(ex)
 
       Then("The correct response is created")
-      response.getStatus should be(400)
+      response.getStatus should be(422)
       val entityString = response.getEntity.asInstanceOf[String]
       val entity = Json.parse(entityString)
       (entity \ "message").as[String] should be("Invalid JSON")
@@ -38,7 +38,7 @@ class MarathonExceptionMapperTest extends UnitTest {
 
     "Render json parse exception correctly" in {
       Given("A JsonParseException, from an invalid json to object Reads")
-      val ex = intercept[JsonParseException] { Json.parse("""{"id":"/test"""").as[AppDefinition] }
+      val ex = intercept[JsonParseException] { Json.parse("""{"id":"/test"""").as[App] }
       val mapper = new MarathonExceptionMapper()
 
       When("The mapper creates a response from this exception")
@@ -49,12 +49,12 @@ class MarathonExceptionMapperTest extends UnitTest {
       val entityString = response.getEntity.asInstanceOf[String]
       val entity = Json.parse(entityString)
       (entity \ "message").as[String] should be("Invalid JSON")
-      (entity \ "details").as[String] should be("""Unexpected end-of-input: expected close marker for OBJECT (from [Source: {"id":"/test"; line: 1, column: 1])""")
+      (entity \ "details").as[String] should be("""Unexpected end-of-input: expected close marker for Object (start marker at [Source: {"id":"/test"; line: 1, column: 1])""")
     }
 
     "Render json mapping exception correctly" in {
       Given("A JsonMappingException, from an invalid json to object Reads")
-      val ex = intercept[JsonMappingException] { Json.parse("").as[AppDefinition] }
+      val ex = intercept[JsonMappingException] { Json.parse("").as[App] }
       val mapper = new MarathonExceptionMapper()
 
       When("The mapper creates a response from this exception")

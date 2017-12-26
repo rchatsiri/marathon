@@ -1,7 +1,9 @@
-package mesosphere.marathon.core.matcher.reconcile
+package mesosphere.marathon
+package core.matcher.reconcile
+
+import java.time.Clock
 
 import akka.event.EventStream
-import mesosphere.marathon.core.base.Clock
 import mesosphere.marathon.core.flow.ReviveOffersConfig
 import mesosphere.marathon.core.leadership.LeadershipModule
 import mesosphere.marathon.core.matcher.base.OfferMatcher

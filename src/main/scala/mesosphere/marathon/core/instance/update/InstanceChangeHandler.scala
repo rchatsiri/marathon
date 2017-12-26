@@ -1,4 +1,5 @@
-package mesosphere.marathon.core.instance.update
+package mesosphere.marathon
+package core.instance.update
 
 import akka.Done
 import mesosphere.marathon.core.condition.Condition
@@ -44,12 +45,12 @@ sealed trait InstanceChange extends Product with Serializable {
 
 /** The given instance has been created or updated. */
 case class InstanceUpdated(
-  instance: Instance,
-  lastState: Option[InstanceState],
-  events: Seq[MarathonEvent]) extends InstanceChange
+    instance: Instance,
+    lastState: Option[InstanceState],
+    events: Seq[MarathonEvent]) extends InstanceChange
 
 /** The given instance has been deleted. */
 case class InstanceDeleted(
-  instance: Instance,
-  lastState: Option[InstanceState],
-  events: Seq[MarathonEvent]) extends InstanceChange
+    instance: Instance,
+    lastState: Option[InstanceState],
+    events: Seq[MarathonEvent]) extends InstanceChange

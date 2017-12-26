@@ -2,6 +2,7 @@ package mesosphere.marathon
 package state
 
 import mesosphere.marathon.Protos.Constraint
+import mesosphere.marathon.core.pod.Network
 import mesosphere.marathon.raml.Resources
 
 import scala.concurrent.duration._
@@ -19,9 +20,9 @@ import scala.concurrent.duration._
   *   minimum: 0.0
   */
 case class BackoffStrategy(
-  backoff: FiniteDuration = 1.seconds,
-  maxLaunchDelay: FiniteDuration = 1.hour,
-  factor: Double = 1.15)
+    backoff: FiniteDuration = 1.seconds,
+    maxLaunchDelay: FiniteDuration = 1.hour,
+    factor: Double = 1.15)
 
 /**
   * A generic spec that specifies something that Marathon is able to launch instances of.
@@ -41,8 +42,8 @@ trait RunSpec extends plugin.RunSpec {
   val version: Timestamp
   val resources: Resources
   val backoffStrategy: BackoffStrategy
-  val residency: Option[Residency] = Option.empty[Residency]
   val upgradeStrategy: UpgradeStrategy
+  def isResident: Boolean = persistentVolumes.nonEmpty
   def withInstances(instances: Int): RunSpec
   def isUpgrade(to: RunSpec): Boolean
   def needsRestart(to: RunSpec): Boolean
@@ -53,10 +54,13 @@ trait RunSpec extends plugin.RunSpec {
   val args = Seq.empty[String]
   val isSingleInstance: Boolean = false
   val volumes = Seq.empty[Volume]
+  val volumeMounts = Seq.empty[VolumeMount]
   val persistentVolumes = Seq.empty[PersistentVolume]
+  val persistentVolumeMounts = Seq.empty[VolumeMount]
   val externalVolumes = Seq.empty[ExternalVolume]
   val diskForPersistentVolumes: Double = 0.0
   val user: Option[String]
   val unreachableStrategy: UnreachableStrategy
   val killSelection: KillSelection
+  val networks: Seq[Network]
 }

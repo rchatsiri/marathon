@@ -11,19 +11,14 @@ import akka.stream.Materializer
 import com.google.inject._
 import com.google.inject.name.Names
 import mesosphere.chaos.http.HttpConf
+import mesosphere.marathon.core.deployment.DeploymentManager
 import mesosphere.marathon.core.election.ElectionService
 import mesosphere.marathon.core.health.HealthCheckManager
 import mesosphere.marathon.core.heartbeat._
 import mesosphere.marathon.core.launchqueue.LaunchQueue
-import mesosphere.marathon.core.readiness.ReadinessCheckExecutor
 import mesosphere.marathon.core.task.termination.KillService
-import mesosphere.marathon.core.task.tracker.InstanceTracker
-import mesosphere.marathon.io.storage.StorageProvider
-import mesosphere.marathon.metrics.Metrics
 import mesosphere.marathon.storage.repository.{ DeploymentRepository, GroupRepository }
-import mesosphere.marathon.upgrade.DeploymentManager
 import mesosphere.util.state._
-import org.apache.mesos.Scheduler
 import org.slf4j.LoggerFactory
 
 import scala.concurrent.duration.FiniteDuration
@@ -35,19 +30,11 @@ object ModuleNames {
   final val SERVER_SET_PATH = "SERVER_SET_PATH"
   final val HISTORY_ACTOR_PROPS = "HISTORY_ACTOR_PROPS"
 
-  final val STORE_APP = "AppStore"
-  final val STORE_TASK_FAILURES = "TaskFailureStore"
-  final val STORE_DEPLOYMENT_PLAN = "DeploymentPlanStore"
-  final val STORE_FRAMEWORK_ID = "FrameworkIdStore"
-  final val STORE_GROUP = "GroupStore"
-  final val STORE_TASK = "TaskStore"
-  final val STORE_EVENT_SUBSCRIBERS = "EventSubscriberStore"
-
   final val MESOS_HEARTBEAT_ACTOR = "MesosHeartbeatActor"
 }
 
-class MarathonModule(conf: MarathonConf, http: HttpConf)
-    extends AbstractModule {
+class MarathonModule(conf: MarathonConf, http: HttpConf, actorSystem: ActorSystem)
+  extends AbstractModule {
 
   val log = LoggerFactory.getLogger(getClass.getName)
 
@@ -57,11 +44,6 @@ class MarathonModule(conf: MarathonConf, http: HttpConf)
     bind(classOf[LeaderProxyConf]).toInstance(conf)
     bind(classOf[ZookeeperConf]).toInstance(conf)
 
-    // MesosHeartbeatMonitor decorates MarathonScheduler
-    bind(classOf[MarathonScheduler]).in(Scopes.SINGLETON)
-    bind(classOf[Scheduler]).annotatedWith(Names.named(MesosHeartbeatMonitor.BASE)).toProvider(getProvider(classOf[MarathonScheduler]))
-    bind(classOf[Scheduler]).to(classOf[MesosHeartbeatMonitor]).in(Scopes.SINGLETON)
-
     bind(classOf[MarathonSchedulerDriverHolder]).in(Scopes.SINGLETON)
     bind(classOf[SchedulerDriverFactory]).to(classOf[MesosSchedulerDriverFactory]).in(Scopes.SINGLETON)
     bind(classOf[MarathonSchedulerService]).in(Scopes.SINGLETON)
@@ -70,8 +52,6 @@ class MarathonModule(conf: MarathonConf, http: HttpConf)
     bind(classOf[String])
       .annotatedWith(Names.named(ModuleNames.SERVER_SET_PATH))
       .toInstance(conf.zooKeeperServerSetPath)
-
-    bind(classOf[Metrics]).in(Scopes.SINGLETON)
   }
 
   @Named(ModuleNames.MESOS_HEARTBEAT_ACTOR)
@@ -104,52 +84,24 @@ class MarathonModule(conf: MarathonConf, http: HttpConf)
     groupRepository: GroupRepository,
     deploymentRepository: DeploymentRepository,
     healthCheckManager: HealthCheckManager,
-    instanceTracker: InstanceTracker,
     killService: KillService,
     launchQueue: LaunchQueue,
     driverHolder: MarathonSchedulerDriverHolder,
     electionService: ElectionService,
-    storage: StorageProvider,
     eventBus: EventStream,
-    readinessCheckExecutor: ReadinessCheckExecutor,
+    schedulerActions: SchedulerActions,
+    deploymentManager: DeploymentManager,
     @Named(ModuleNames.HISTORY_ACTOR_PROPS) historyActorProps: Props)(implicit mat: Materializer): ActorRef = {
     val supervision = OneForOneStrategy() {
       case NonFatal(_) => Restart
     }
 
-    import scala.concurrent.ExecutionContext.Implicits.global
-
-    def createSchedulerActions(schedulerActor: ActorRef): SchedulerActions = {
-      new SchedulerActions(
-        groupRepository,
-        healthCheckManager,
-        instanceTracker,
-        launchQueue,
-        eventBus,
-        schedulerActor,
-        killService)
-    }
-
-    def deploymentManagerProps(schedulerActions: SchedulerActions): Props = {
-      Props(
-        new DeploymentManager(
-          instanceTracker,
-          killService,
-          launchQueue,
-          schedulerActions,
-          storage,
-          healthCheckManager,
-          eventBus,
-          readinessCheckExecutor,
-          deploymentRepository
-        )
-      )
-    }
-
     system.actorOf(
       MarathonSchedulerActor.props(
-        createSchedulerActions,
-        deploymentManagerProps,
+        groupRepository,
+        schedulerActions,
+        deploymentManager,
+        deploymentRepository,
         historyActorProps,
         healthCheckManager,
         killService,
@@ -171,17 +123,12 @@ class MarathonModule(conf: MarathonConf, http: HttpConf)
 
   @Provides
   @Singleton
-  def provideActorSystem(): ActorSystem = ActorSystem("marathon")
+  def provideActorSystem(): ActorSystem = actorSystem
 
   /* Reexports the `akka.actor.ActorSystem` as `akka.actor.ActorRefFactory`. It doesn't work automatically. */
   @Provides
   @Singleton
   def provideActorRefFactory(system: ActorSystem): ActorRefFactory = system
-
-  @Provides
-  @Singleton
-  def provideStorageProvider(http: HttpConf): StorageProvider =
-    StorageProvider.provider(conf, http)
 
   @Provides
   @Singleton

@@ -1,10 +1,10 @@
 package mesosphere.marathon
 package core.task.tracker
 
+import com.typesafe.scalalogging.StrictLogging
 import mesosphere.marathon.core.instance.Instance
 import mesosphere.marathon.core.task.Task
 import mesosphere.marathon.state.PathId
-import org.slf4j.LoggerFactory
 
 import scala.concurrent.{ ExecutionContext, Future }
 
@@ -12,7 +12,7 @@ import scala.concurrent.{ ExecutionContext, Future }
   * The TaskTracker exposes the latest known state for every task.
   *
   * It is an read-only interface. For modification, see
-  * * [[TaskStateOpProcessor]] for create, update, delete operations
+  * * [[InstanceStateOpProcessor]] for create, update, delete operations
   *
   * FIXME: To allow introducing the new asynchronous [[InstanceTracker]] without needing to
   * refactor a lot of code at once, synchronous methods are still available but should be
@@ -20,7 +20,6 @@ import scala.concurrent.{ ExecutionContext, Future }
   */
 trait InstanceTracker {
 
-  def specInstancesLaunchedSync(pathId: PathId): Seq[Instance]
   def specInstancesSync(pathId: PathId): Seq[Instance]
   def specInstances(pathId: PathId)(implicit ec: ExecutionContext): Future[Seq[Instance]]
 
@@ -30,6 +29,7 @@ trait InstanceTracker {
   def instancesBySpec()(implicit ec: ExecutionContext): Future[InstanceTracker.InstancesBySpec]
 
   def countLaunchedSpecInstancesSync(appId: PathId): Int
+  def countLaunchedSpecInstances(appId: PathId): Future[Int]
 
   def hasSpecInstancesSync(appId: PathId): Boolean
   def hasSpecInstances(appId: PathId)(implicit ec: ExecutionContext): Future[Boolean]
@@ -39,8 +39,7 @@ object InstanceTracker {
   /**
     * Contains all tasks grouped by app ID.
     */
-  case class InstancesBySpec private (instancesMap: Map[PathId, InstanceTracker.SpecInstances]) {
-    import InstancesBySpec._
+  case class InstancesBySpec private (instancesMap: Map[PathId, InstanceTracker.SpecInstances]) extends StrictLogging {
 
     def allSpecIdsWithInstances: Set[PathId] = instancesMap.keySet
 
@@ -67,17 +66,16 @@ object InstanceTracker {
       update: InstanceTracker.SpecInstances => InstanceTracker.SpecInstances): InstancesBySpec = {
       val updated = update(instancesMap(appId))
       if (updated.isEmpty) {
-        log.info(s"Removed app [$appId] from tracker")
+        logger.info(s"Removed app [$appId] from tracker")
         copy(instancesMap = instancesMap - appId)
       } else {
-        log.debug(s"Updated app [$appId], currently ${updated.instanceMap.size} tasks in total.")
+        logger.debug(s"Updated app [$appId], currently ${updated.instanceMap.size} tasks in total.")
         copy(instancesMap = instancesMap + (appId -> updated))
       }
     }
   }
 
   object InstancesBySpec {
-    private val log = LoggerFactory.getLogger(getClass)
 
     def of(specInstances: collection.immutable.Map[PathId, InstanceTracker.SpecInstances]): InstancesBySpec = {
       new InstancesBySpec(specInstances.withDefault(appId => InstanceTracker.SpecInstances(appId)))

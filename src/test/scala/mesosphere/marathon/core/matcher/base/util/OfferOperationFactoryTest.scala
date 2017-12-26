@@ -2,8 +2,9 @@ package mesosphere.marathon
 package core.matcher.base.util
 
 import mesosphere.UnitTest
+import mesosphere.marathon.core.launcher.impl.TaskLabels
 import mesosphere.marathon.core.task.Task
-import mesosphere.marathon.state.{ DiskSource, PathId, PersistentVolume, PersistentVolumeInfo }
+import mesosphere.marathon.state._
 import mesosphere.marathon.stream.Implicits._
 import mesosphere.marathon.test.MarathonTestHelper
 import org.apache.mesos.{ Protos => Mesos }
@@ -16,7 +17,7 @@ class OfferOperationFactoryTest extends UnitTest {
 
       Given("a factory without principal or role")
       val factory = new OfferOperationFactory(None, None)
-      val taskInfo = MarathonTestHelper.makeOneCPUTask(Task.Id.forRunSpec(f.runSpecId)).build()
+      val taskInfo = MarathonTestHelper.makeOneCPUTask(f.taskId).build()
 
       When("We create a launch operation")
       val operation = factory.launch(taskInfo)
@@ -34,7 +35,7 @@ class OfferOperationFactoryTest extends UnitTest {
 
       When("We create a reserve operation")
       val error = intercept[WrongConfigurationException] {
-        factory.reserve(f.frameworkId, Task.Id.forRunSpec(PathId("/test")), Seq(Mesos.Resource.getDefaultInstance))
+        factory.reserve(f.reservationLabels, Seq(Mesos.Resource.getDefaultInstance))
       }
 
       Then("A meaningful exception is thrown")
@@ -46,10 +47,10 @@ class OfferOperationFactoryTest extends UnitTest {
 
       Given("A simple task")
       val factory = new OfferOperationFactory(Some("principal"), Some("role"))
-      val task = MarathonTestHelper.makeOneCPUTask(Task.Id.forRunSpec(f.runSpecId))
+      val task = MarathonTestHelper.makeOneCPUTask(f.taskId)
 
       When("We create a reserve operation")
-      val operation = factory.reserve(f.frameworkId, Task.Id(task.getTaskId), task.getResourcesList.to[Seq])
+      val operation = factory.reserve(f.reservationLabels, task.getResourcesList.to[Seq])
 
       Then("The operation is as expected")
       operation.getType shouldEqual Mesos.Offer.Operation.Type.RESERVE
@@ -71,12 +72,12 @@ class OfferOperationFactoryTest extends UnitTest {
 
       Given("a factory without principal")
       val factory = new OfferOperationFactory(Some("principal"), Some("role"))
-      val task = MarathonTestHelper.makeOneCPUTask(Task.Id.forRunSpec(f.runSpecId))
+      val task = MarathonTestHelper.makeOneCPUTask(f.taskId)
       val volumes = Seq(f.localVolume("mount"))
       val resource = MarathonTestHelper.scalarResource("disk", 1024)
 
       When("We create a reserve operation")
-      val operation = factory.createVolumes(f.frameworkId, Task.Id(task.getTaskId), volumes.map(v => (DiskSource.root, v)))
+      val operation = factory.createVolumes(f.reservationLabels, volumes.map(v => (DiskSource.root, v)))
 
       Then("The operation is as expected")
       operation.getType shouldEqual Mesos.Offer.Operation.Type.CREATE
@@ -95,23 +96,23 @@ class OfferOperationFactoryTest extends UnitTest {
       volume.getDisk.hasPersistence shouldEqual true
       volume.getDisk.getPersistence.getId shouldEqual originalVolume.id.idString
       volume.getDisk.hasVolume shouldEqual true
-      volume.getDisk.getVolume.getContainerPath shouldEqual originalVolume.persistentVolume.containerPath
-      volume.getDisk.getVolume.getMode shouldEqual originalVolume.persistentVolume.mode
+      volume.getDisk.getVolume.getContainerPath shouldEqual originalVolume.mount.mountPath
+      volume.getDisk.getVolume.getMode shouldEqual Mesos.Volume.Mode.RW
     }
   }
   class Fixture {
     val runSpecId = PathId("/my-app")
+    val taskId = Task.Id.forRunSpec(runSpecId)
     val frameworkId = MarathonTestHelper.frameworkId
+    val reservationLabels = TaskLabels.labelsForTask(frameworkId, taskId)
     val principal = Some("principal")
     val role = Some("role")
     val factory = new OfferOperationFactory(principal, role)
 
-    def localVolume(containerPath: String): Task.LocalVolume = {
-      val pv = PersistentVolume(
-        containerPath = containerPath,
-        persistent = PersistentVolumeInfo(size = 10),
-        mode = Mesos.Volume.Mode.RW)
-      Task.LocalVolume(Task.LocalVolumeId(runSpecId, pv), pv)
+    def localVolume(mountPath: String): Task.LocalVolume = {
+      val pv = PersistentVolume(None, PersistentVolumeInfo(size = 10))
+      val mount = VolumeMount(None, mountPath)
+      Task.LocalVolume(Task.LocalVolumeId(runSpecId, pv, mount), pv, mount)
     }
   }
 }

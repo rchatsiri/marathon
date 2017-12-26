@@ -1,6 +1,7 @@
 package mesosphere.marathon
 package api.v2
 
+import java.time.Clock
 import java.net.URI
 import javax.inject.Inject
 import javax.servlet.http.HttpServletRequest
@@ -10,22 +11,22 @@ import javax.ws.rs.core.{ Context, MediaType, Response }
 
 import akka.event.EventStream
 import akka.stream.Materializer
-import akka.stream.scaladsl.Sink
-import com.codahale.metrics.annotation.Timed
+import akka.stream.scaladsl.{ Sink, Source }
 import com.wix.accord.Validator
-import mesosphere.marathon.MarathonConf
 import mesosphere.marathon.api.v2.validation.PodsValidation
 import mesosphere.marathon.api.{ AuthResource, MarathonMediaType, RestResource, TaskKiller }
 import mesosphere.marathon.core.appinfo.{ PodSelector, PodStatusService, Selector }
-import mesosphere.marathon.core.base.Clock
 import mesosphere.marathon.core.event._
 import mesosphere.marathon.core.instance.Instance
 import mesosphere.marathon.core.pod.{ PodDefinition, PodManager }
 import mesosphere.marathon.plugin.auth._
-import mesosphere.marathon.raml.{ NetworkMode, Pod, Raml }
-import mesosphere.marathon.state.{ PathId, Timestamp }
+import mesosphere.marathon.raml.{ Pod, Raml }
+import mesosphere.marathon.state.{ PathId, Timestamp, VersionInfo }
 import mesosphere.marathon.util.SemanticVersion
 import play.api.libs.json.Json
+import Normalization._
+import mesosphere.marathon.core.plugin.PluginManager
+import mesosphere.marathon.api.v2.Validation._
 
 @Path("v2/pods")
 @Consumes(Array(MediaType.APPLICATION_JSON))
@@ -41,43 +42,31 @@ class PodsResource @Inject() (
     eventBus: EventStream,
     mat: Materializer,
     clock: Clock,
-    scheduler: MarathonScheduler) extends RestResource with AuthResource {
+    scheduler: MarathonScheduler,
+    pluginManager: PluginManager) extends RestResource with AuthResource {
 
   import PodsResource._
   implicit def podDefValidator: Validator[Pod] =
-    PodsValidation.podDefValidator(
+    PodsValidation.podValidator(
       config.availableFeatures,
-      scheduler.mesosMasterVersion().getOrElse(SemanticVersion(0, 0, 0)))
+      scheduler.mesosMasterVersion().getOrElse(SemanticVersion(0, 0, 0)), config.defaultNetworkName.get)
 
   // If we change/add/upgrade the notion of a Pod and can't do it purely in the internal model,
   // update the json first
-  private def normalize(pod: Pod): Pod = {
-    if (pod.networks.exists(_.name.isEmpty)) {
-      val networks = pod.networks.map { network =>
-        if (network.mode == NetworkMode.Container && network.name.isEmpty) {
-          config.defaultNetworkName.get.fold(network) { name =>
-            network.copy(name = Some(name))
-          }
-        } else {
-          network
-        }
-      }
-      pod.copy(networks = networks)
-    } else {
-      pod
-    }
-  }
+  private implicit val normalizer = PodNormalization.apply(PodNormalization.Configuration(
+    config.defaultNetworkName.get))
 
   // If we can normalize using the internal model, do that instead.
   // The version of the pod is changed here to make sure, the user has not send a version.
-  private def normalize(pod: PodDefinition): PodDefinition = pod.copy(version = clock.now())
+  private def normalize(pod: PodDefinition): PodDefinition = pod.copy(versionInfo = VersionInfo.OnlyVersion(clock.now()))
 
   private def marshal(pod: Pod): String = Json.stringify(Json.toJson(pod))
 
   private def marshal(pod: PodDefinition): String = marshal(Raml.toRaml(pod))
 
   private def unmarshal(bytes: Array[Byte]): Pod = {
-    normalize(Json.parse(bytes).as[Pod])
+    // no normalization or validation here, that happens elsewhere and in a precise order
+    Json.parse(bytes).as[Pod]
   }
 
   /**
@@ -89,22 +78,23 @@ class PodsResource @Inject() (
     * @return HTTP OK if pods are supported
     */
   @HEAD
-  @Timed
   def capability(@Context req: HttpServletRequest): Response = authenticated(req) { _ =>
     ok()
   }
 
-  @POST @Timed
+  @POST
   def create(
     body: Array[Byte],
     @DefaultValue("false")@QueryParam("force") force: Boolean,
     @Context req: HttpServletRequest): Response = {
     authenticated(req) { implicit identity =>
       withValid(unmarshal(body)) { podDef =>
-        val pod = normalize(Raml.fromRaml(normalize(podDef)))
+        val pod = normalize(Raml.fromRaml(podDef.normalize))
+        validateOrThrow(pod)(PodsValidation.pluginValidators)
+
         withAuthorization(CreateRunSpec, pod) {
           val deployment = result(podSystem.create(pod, force))
-          Events.maybePost(PodEvent(req.getRemoteAddr, req.getRequestURI, PodEvent.Created))
+          eventBus.publish(PodEvent(req.getRemoteAddr, req.getRequestURI, PodEvent.Created))
 
           Response.created(new URI(pod.id.toString))
             .header(RestResource.DeploymentHeader, deployment.id)
@@ -115,7 +105,7 @@ class PodsResource @Inject() (
     }
   }
 
-  @PUT @Timed @Path("""{id:.+}""")
+  @PUT @Path("""{id:.+}""")
   def update(
     @PathParam("id") id: String,
     body: Array[Byte],
@@ -133,10 +123,12 @@ class PodsResource @Inject() (
           """.stripMargin
         ).build()
       } else {
-        val pod = normalize(Raml.fromRaml(normalize(podDef)))
+        val pod = normalize(Raml.fromRaml(podDef.normalize))
+        validateOrThrow(pod)(PodsValidation.pluginValidators)
+
         withAuthorization(UpdateRunSpec, pod) {
           val deployment = result(podSystem.update(pod, force))
-          Events.maybePost(PodEvent(req.getRemoteAddr, req.getRequestURI, PodEvent.Updated))
+          eventBus.publish(PodEvent(req.getRemoteAddr, req.getRequestURI, PodEvent.Updated))
 
           val builder = Response
             .ok(new URI(pod.id.toString))
@@ -148,13 +140,13 @@ class PodsResource @Inject() (
     }
   }
 
-  @GET @Timed
+  @GET
   def findAll(@Context req: HttpServletRequest): Response = authenticated(req) { implicit identity =>
-    val pods = result(podSystem.findAll(isAuthorized(ViewRunSpec, _)).runWith(Sink.seq))
+    val pods = podSystem.findAll(isAuthorized(ViewRunSpec, _))
     ok(Json.stringify(Json.toJson(pods.map(Raml.toRaml(_)))))
   }
 
-  @GET @Timed @Path("""{id:.+}""")
+  @GET @Path("""{id:.+}""")
   def find(
     @PathParam("id") id: String,
     @Context req: HttpServletRequest): Response = authenticated(req) { implicit identity =>
@@ -162,7 +154,7 @@ class PodsResource @Inject() (
     import PathId._
 
     withValid(id.toRootPath) { id =>
-      result(podSystem.find(id)).fold(notFound(s"""{"message": "pod with $id does not exist"}""")) { pod =>
+      podSystem.find(id).fold(notFound(s"""{"message": "pod with $id does not exist"}""")) { pod =>
         withAuthorization(ViewRunSpec, pod) {
           ok(marshal(pod))
         }
@@ -170,7 +162,7 @@ class PodsResource @Inject() (
     }
   }
 
-  @DELETE @Timed @Path("""{id:.+}""")
+  @DELETE @Path("""{id:.+}""")
   def remove(
     @PathParam("id") id: String,
     @DefaultValue("false")@QueryParam("force") force: Boolean,
@@ -179,11 +171,11 @@ class PodsResource @Inject() (
     import PathId._
 
     withValid(id.toRootPath) { id =>
-      withAuthorization(DeleteRunSpec, result(podSystem.find(id)), unknownPod(id)) { pod =>
+      withAuthorization(DeleteRunSpec, podSystem.find(id), unknownPod(id)) { pod =>
 
         val deployment = result(podSystem.delete(id, force))
 
-        Events.maybePost(PodEvent(req.getRemoteAddr, req.getRequestURI, PodEvent.Deleted))
+        eventBus.publish(PodEvent(req.getRemoteAddr, req.getRequestURI, PodEvent.Deleted))
         Response.status(Status.ACCEPTED)
           .location(new URI(deployment.id)) // TODO(jdef) probably want a different header here since deployment != pod
           .header(RestResource.DeploymentHeader, deployment.id)
@@ -193,7 +185,6 @@ class PodsResource @Inject() (
   }
 
   @GET
-  @Timed
   @Path("""{id:.+}::status""")
   def status(
     @PathParam("id") id: String,
@@ -210,7 +201,6 @@ class PodsResource @Inject() (
   }
 
   @GET
-  @Timed
   @Path("""{id:.+}::versions""")
   def versions(
     @PathParam("id") id: String,
@@ -218,7 +208,7 @@ class PodsResource @Inject() (
     import PathId._
     import mesosphere.marathon.api.v2.json.Formats.TimestampFormat
     withValid(id.toRootPath) { id =>
-      result(podSystem.find(id)).fold(notFound(id)) { pod =>
+      podSystem.find(id).fold(notFound(id)) { pod =>
         withAuthorization(ViewRunSpec, pod) {
           val versions = podSystem.versions(id).runWith(Sink.seq)
           ok(Json.stringify(Json.toJson(result(versions))))
@@ -228,7 +218,6 @@ class PodsResource @Inject() (
   }
 
   @GET
-  @Timed
   @Path("""{id:.+}::versions/{version}""")
   def version(@PathParam("id") id: String, @PathParam("version") versionString: String,
     @Context req: HttpServletRequest): Response = authenticated(req) { implicit identity =>
@@ -244,11 +233,10 @@ class PodsResource @Inject() (
   }
 
   @GET
-  @Timed
   @Path("::status")
   @SuppressWarnings(Array("OptionGet", "FilterOptionAndGet"))
   def allStatus(@Context req: HttpServletRequest): Response = authenticated(req) { implicit identity =>
-    val future = podSystem.ids().mapAsync(Int.MaxValue) { id =>
+    val future = Source(podSystem.ids()).mapAsync(Int.MaxValue) { id =>
       podStatusService.selectPodStatus(id, authzSelector)
     }.filter(_.isDefined).map(_.get).runWith(Sink.seq)
 
@@ -256,7 +244,6 @@ class PodsResource @Inject() (
   }
 
   @DELETE
-  @Timed
   @Path("""{id:.+}::instances/{instanceId}""")
   def killInstance(
     @PathParam("id") id: String,
@@ -278,7 +265,6 @@ class PodsResource @Inject() (
   }
 
   @DELETE
-  @Timed
   @Path("""{id:.+}::instances""")
   def killInstances(@PathParam("id") id: String, body: Array[Byte], @Context req: HttpServletRequest): Response =
     authenticated(req) { implicit identity =>
