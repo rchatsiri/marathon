@@ -2,6 +2,14 @@
 
 Marathon is a production-proven [Apache Mesos][Mesos] framework for container orchestration. [DC/OS](https://dcos.io/get-started/#marathon) is the easiest way to start using Marathon. Issues are tracked in [JIRA](https://jira.mesosphere.com/projects/MARATHON/issues/).
 
+Marathon deploy with native system.
+
+
+## Notes run marathon application
+
+ * Simple run ``` sbt -mem 2048 'run --master localhost:5050 --zk zk://localhost:2181/marathon' ```
+
+
 Marathon provides a
 [REST API](https://mesosphere.github.io/marathon/docs/rest-api.html) for
 starting, stopping, and scaling applications. Marathon is written in Scala and
