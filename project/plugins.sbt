@@ -22,6 +22,8 @@ addSbtPlugin("pl.project13.scala" % "sbt-jmh" % "0.2.25")
 addSbtPlugin("com.typesafe.sbt" % "sbt-aspectj" % "0.10.6")
 addSbtPlugin("io.get-coursier" % "sbt-coursier" % "1.0.0-RC13")
 
+addSbtPlugin("org.ensime" % "sbt-ensime" % "2.2.1")
+
 libraryDependencies ++= Seq(
   "org.raml" % "raml-parser-2" % "1.0.0",
   "com.eed3si9n" %% "treehugger" % "0.4.1",

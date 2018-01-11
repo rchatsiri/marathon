@@ -125,7 +125,7 @@ lazy val commonSettings = testSettings ++
   s3credentials := new EnvironmentVariableCredentialsProvider() | new InstanceProfileCredentialsProvider(),
 
   scapegoatVersion := "1.3.0",
-
+ 
   coverageMinimum := 70,
   coverageFailOnMinimum := true,
 
@@ -145,6 +145,8 @@ lazy val commonSettings = testSettings ++
   // TODO: There appears to be a bug where uncommitted changes is true even if nothing is committed.
   git.uncommittedSignifier := None
 )
+ 
+ensimeScalaVersion in ThisBuild := "2.11.11"
 
 
 lazy val packageDebianForLoader = taskKey[File]("Create debian package for active serverLoader")
