@@ -29,6 +29,7 @@ Since Marathon version 0.7.0 and Mesos 0.20.0, you can [deploy, run and scale Do
 * *Basic Auth* and *SSL*
 * *[Metrics](https://mesosphere.github.io/marathon/docs/metrics.html)*:
   query them at `/metrics` in JSON format or push them to graphite/statsd/datadog.
+* *[Container Storage Interface(CSI)](http://mesos.apache.org/documentation/latest/csi/).
 
 ## Documentation
 
@@ -119,7 +120,7 @@ Build it:
 A running zookeeper instance is required, if there isn't one already available, there is a docker image available for this:
 
     docker run --name some-zookeeper --restart always -d zookeeper
-    
+
 Run it with zookeeper container:
 
     docker run --link some-zookeeper:zookeeper marathon-head --master local --zk zk://zookeeper:2181/marathon
@@ -132,124 +133,13 @@ If you want to inspect the contents of the Docker container:
 
     docker run -it --entrypoint=/bin/bash marathon-head -s
 
-### Marathon UI
 
-To develop on the web UI look into the instructions of the [Marathon UI](https://github.com/mesosphere/marathon-ui) repository.
+## Resource
 
-## Marathon Clients
-
-* [marathonctl](https://github.com/shoenig/marathonctl) A handy CLI tool for controlling Marathon
-* [Ruby gem and command line client](https://rubygems.org/gems/marathon-api)
-
-    Running Chronos with the Ruby Marathon Client:
-
-        marathon -M http://foo.bar:8080 start -i chronos -u https://s3.amazonaws.com/mesosphere-binaries-public/chronos/chronos.tgz \
-            -C "./chronos/bin/demo ./chronos/config/nomail.yml \
-            ./chronos/target/chronos-1.0-SNAPSHOT.jar" -c 1.0 -m 1024
-* [Ruby gem marathon_deploy](https://github.com/eBayClassifiedsGroup/marathon_deploy) alternative command line tool to deploy using json or yaml files with ENV macros.
-* [Scala client](https://github.com/guidewire/marathon-client), developed at Guidewire
-* [Java client](https://github.com/mohitsoni/marathon-client) by Mohit Soni
-* [Maven plugin](https://github.com/holidaycheck/marathon-maven-plugin), developed at [HolidayCheck](http://www.holidaycheck.com/)
-* [Python client](https://github.com/thefactory/marathon-python), developed at [The Factory](http://www.thefactory.com)
-* [Python client](https://github.com/Wizcorp/marathon-client.py), developed at [Wizcorp](http://www.wizcorp.jp)
-* [Go client](https://github.com/gambol99/go-marathon) by Rohith Jayawardene
-* [Go client](https://github.com/jbdalido/gomarathon) by Jean-Baptiste Dalido
-* [Node client](https://github.com/silas/node-mesos) by Silas Sewell
-* [Clojure client](https://github.com/codemomentum/marathonclj) by Halit Olali
-
-## Companies using Marathon
-
-Across all installations Marathon is managing applications on more than 100,000 nodes world-wide. These are some of the companies using it:
-
-* [Adform](http://site.adform.com/)
-* [Alauda](http://www.alauda.cn/)
-* [Allegro](http://allegro.tech)
-* [AllUnite](https://allunite.com/)
-* [Argus Cyber Security](http://argus-sec.com/)
-* [Artirix](http://www.artirix.com/)
-* [Arukas](https://arukas.io/)
-* [bol.com](https://www.bol.com/)
-* [Brand24](https://brand24.com/)
-* [Branding Brand](http://www.brandingbrand.com/)
-* [Corvisa](https://www.corvisa.com/)
-* [Criteo] (http://www.criteo.com/)
-* [Daemon](http://www.daemon.com.au/)
-* [DataMan](http://www.shurenyun.com/)
-* [DHL Parcel](https://www.dhlparcel.nl/)
-* [Disqus](https://disqus.com/)
-* [DueDil](https://www.duedil.com/)
-* [eBay](http://www.ebay.com/)
-* [The Factory](https://github.com/thefactory/)
-* [Football Radar](http://www.footballradar.com)
-* [Guidewire](https://www.guidewire.com/)
-* [Groupon](https://www.groupon.com/)
-* [GSShop](http://www.gsshop.com/)
-* [HolidayCheck](http://www.holidaycheck.com/)
-* [Human API](https://humanapi.co/)
-* [Indix](http://www.indix.com/)
-* [ING](http://www.ing.com/)
-* [iQIYI](http://www.iqiyi.com/)
-* [LaunchKey](https://launchkey.com/)
-* [Mapillary](https://www.mapillary.com/)
-* [Measurence](http://www.measurence.com/)
-* [Motus](http://www.motus.com/)
-* [Notonthehighstreet](http://www.notonthehighstreet.com/)
-* [OpenTable](http://www.opentable.com/)
-* [Opera](https://www.opera.com)
-* [Orbitz](http://www.orbitz.com/)
-* [Otto](https://www.otto.de/)
-* [OVH](https://ovh.com/)
-* [PayPal](https://www.paypal.com)
-* [Qubit](http://www.qubit.com/)
-* [RelateIQ](https://www.salesforceiq.com/)
-* [Refinery29](https://www.refinery29.com)
-* [Sailthru](http://www.sailthru.com/)
-* [SAKURA Internet Inc](https://www.sakura.ad.jp/)
-* [sloppy.io](http://sloppy.io/)
-* [SmartProcure](https://smartprocure.us/)
-* [Strava](https://www.strava.com)
-* [Sveriges Television](http://www.svt.se)
-* [T2 Systems](http://t2systems.com)
-* [Teradata](http://www.teradata.com)
-* [trivago](http://www.trivago.com/)
-* [VANAD Enovation](http://www.vanadenovation.nl/)
-* [Viadeo](http://www.viadeo.com)
-* [Wikia](http://www.wikia.com/Wikia)
-* [WooRank](https://www.woorank.com/)
-* [Yelp](http://www.yelp.com/)
-
-Not in the list? Open a pull request and add yourself!
-
-## Help
-
-Have you found an issue? Feel free to report it using our [Issues](https://github.com/mesosphere/marathon/issues) page.
-In order to speed up response times, we ask you to provide as much
-information on how to reproduce the problem as possible. If the issue is related
- in any way to the web ui, we kindly ask you to use the `gui` label.
-
-If you have questions, please post on the
-[Marathon Framework Group](https://groups.google.com/forum/?hl=en#!forum/marathon-framework)
-email list. You can find Marathon support in the `#marathon` channel, and Mesos
-support in the `#mesos` channel, on [freenode][freenode] (IRC). The team at
-[Mesosphere][Mesosphere] is also happy to answer any questions.
-
-If you'd like to take part in design research and test new features in Marathon before they're released, please add your name to our [UX Research](http://uxresearch.mesosphere.com) list.
-
-## Authors
-
-Marathon was created by [Tobias Knaup](https://github.com/guenter) and
-[Florian Leibert](https://github.com/florianleibert) and continues to be
-developed by the team at Mesosphere and by many contributors from
-the community.
-
-[Chronos]: https://github.com/mesos/chronos "Airbnb's Chronos"
-[Mesos]: https://mesos.apache.org/ "Apache Mesos"
-[Zookeeper]: https://zookeeper.apache.org/ "Apache Zookeeper"
-[Storm]: http://storm.apache.org "distributed realtime computation"
-[freenode]: https://freenode.net/ "IRC channels"
-[upstart]: http://upstart.ubuntu.com/ "Ubuntu's event-based daemons"
-[init]: https://en.wikipedia.org/wiki/Init "init"
-[Mesosphere]: https://mesosphere.com/ "Mesosphere"
+    * Tools
+       * Setting Emacs with [ensime-sbt](https://www.47deg.com/blog/scala-development-with-emacs/)
+    * Concept
+       * Container Storage Interface(CSI)(http://mesos.apache.org/documentation/latest/csi/)
 
 ## Acknowledgements
 

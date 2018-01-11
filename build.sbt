@@ -17,6 +17,8 @@ def formattingTestArg(target: File) = Tests.Argument("-u", target.getAbsolutePat
 resolvers += Resolver.sonatypeRepo("snapshots")
 addCompilerPlugin("org.psywerx.hairyfotr" %% "linter" % "0.1.16")
 
+ensimeScalaVersion in ThisBuild := "2.11.8"
+
 /**
   * This on load trigger is used to set parameters in teamcity.
   * It is only executed within teamcity and can be ignored otherwise.

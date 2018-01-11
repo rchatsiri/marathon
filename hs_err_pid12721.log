@@ -1,0 +1,326 @@
+#
+# There is insufficient memory for the Java Runtime Environment to continue.
+# Native memory allocation (mmap) failed to map 8415477760 bytes for committing reserved memory.
+# Possible reasons:
+#   The system is out of physical RAM or swap space
+#   In 32 bit mode, the process size limit was hit
+# Possible solutions:
+#   Reduce memory load on the system
+#   Increase physical memory or swap space
+#   Check if swap backing store is full
+#   Use 64 bit Java on a 64 bit OS
+#   Decrease Java heap size (-Xmx/-Xms)
+#   Decrease number of Java threads
+#   Decrease Java thread stack sizes (-Xss)
+#   Set larger code cache with -XX:ReservedCodeCacheSize=
+# This output file may be truncated or incomplete.
+#
+#  Out of Memory Error (os_linux.cpp:2640), pid=12721, tid=0x00007f5afc54b700
+#
+# JRE version:  (8.0_151-b12) (build )
+# Java VM: Java HotSpot(TM) 64-Bit Server VM (25.151-b12 mixed mode linux-amd64 compressed oops)
+# Failed to write core dump. Core dumps have been disabled. To enable core dumping, try "ulimit -c unlimited" before starting Java again
+#
+
+---------------  T H R E A D  ---------------
+
+Current thread (0x00007f5af400a000):  JavaThread "Unknown thread" [_thread_in_vm, id=12722, stack(0x00007f5afc44b000,0x00007f5afc54c000)]
+
+Stack: [0x00007f5afc44b000,0x00007f5afc54c000],  sp=0x00007f5afc54a370,  free space=1020k
+Native frames: (J=compiled Java code, j=interpreted, Vv=VM code, C=native code)
+V  [libjvm.so+0xacb58a]  VMError::report_and_die()+0x2ba
+V  [libjvm.so+0x4ff4ab]  report_vm_out_of_memory(char const*, int, unsigned long, VMErrorType, char const*)+0x8b
+V  [libjvm.so+0x928113]  os::Linux::commit_memory_impl(char*, unsigned long, bool)+0x103
+V  [libjvm.so+0x928669]  os::pd_commit_memory(char*, unsigned long, unsigned long, bool)+0x29
+V  [libjvm.so+0x92288a]  os::commit_memory(char*, unsigned long, unsigned long, bool)+0x2a
+V  [libjvm.so+0xac72e9]  VirtualSpace::expand_by(unsigned long, bool)+0x199
+V  [libjvm.so+0xac7e3e]  VirtualSpace::initialize(ReservedSpace, unsigned long)+0xee
+V  [libjvm.so+0x5fda81]  CardGeneration::CardGeneration(ReservedSpace, unsigned long, int, GenRemSet*)+0xf1
+V  [libjvm.so+0x4e8b7e]  ConcurrentMarkSweepGeneration::ConcurrentMarkSweepGeneration(ReservedSpace, unsigned long, int, CardTableRS*, bool, FreeBlockDictionary<FreeChunk>::DictionaryChoice)+0x4e
+V  [libjvm.so+0x5feb42]  GenerationSpec::init(ReservedSpace, int, GenRemSet*)+0xf2
+V  [libjvm.so+0x5ed97e]  GenCollectedHeap::initialize()+0x1de
+V  [libjvm.so+0xa93603]  Universe::initialize_heap()+0xf3
+V  [libjvm.so+0xa93b6e]  universe_init()+0x3e
+V  [libjvm.so+0x640545]  init_globals()+0x65
+V  [libjvm.so+0xa7725e]  Threads::create_vm(JavaVMInitArgs*, bool*)+0x23e
+V  [libjvm.so+0x6d4e44]  JNI_CreateJavaVM+0x74
+C  [libjli.so+0x797e]  JavaMain+0x9e
+C  [libpthread.so.0+0x7494]  start_thread+0xc4
+
+
+---------------  P R O C E S S  ---------------
+
+Java Threads: ( => current thread )
+
+Other Threads:
+
+=>0x00007f5af400a000 (exited) JavaThread "Unknown thread" [_thread_in_vm, id=12722, stack(0x00007f5afc44b000,0x00007f5afc54c000)]
+
+VM state:not at safepoint (not fully initialized)
+
+VM Mutex/Monitor currently owned by a thread: None
+
+GC Heap History (0 events):
+No events
+
+Deoptimization events (0 events):
+No events
+
+Internal exceptions (0 events):
+No events
+
+Events (0 events):
+No events
+
+
+Dynamic libraries:
+00400000-00401000 r-xp 00000000 08:01 405244                             /home/rchatsiri/workspacejava/jdk1.8.0_151/bin/java
+00600000-00601000 rw-p 00000000 08:01 405244                             /home/rchatsiri/workspacejava/jdk1.8.0_151/bin/java
+01454000-01475000 rw-p 00000000 00:00 0                                  [heap]
+5c0000000-5ca660000 rw-p 00000000 00:00 0 
+7f5ac8000000-7f5ac8021000 rw-p 00000000 00:00 0 
+7f5ac8021000-7f5acc000000 ---p 00000000 00:00 0 
+7f5acc000000-7f5acc021000 rw-p 00000000 00:00 0 
+7f5acc021000-7f5ad0000000 ---p 00000000 00:00 0 
+7f5ad2fff000-7f5ad3053000 rw-p 00000000 00:00 0 
+7f5ad3053000-7f5ad3fff000 ---p 00000000 00:00 0 
+7f5ad3fff000-7f5ad4000000 rw-p 00000000 00:00 0 
+7f5ad4000000-7f5ad4270000 rwxp 00000000 00:00 0 
+7f5ad4270000-7f5af4000000 ---p 00000000 00:00 0 
+7f5af4000000-7f5af403a000 rw-p 00000000 00:00 0 
+7f5af403a000-7f5af8000000 ---p 00000000 00:00 0 
+7f5af882f000-7f5af8bc8000 rw-p 00000000 00:00 0 
+7f5af8bc8000-7f5af8bc9000 ---p 00000000 00:00 0 
+7f5af8bc9000-7f5af8cc9000 rw-p 00000000 00:00 0 
+7f5af8cc9000-7f5af8cca000 ---p 00000000 00:00 0 
+7f5af8cca000-7f5af8dca000 rw-p 00000000 00:00 0 
+7f5af8dca000-7f5af8dd4000 rw-p 00000000 00:00 0 
+7f5af8dd4000-7f5af95ca000 ---p 00000000 00:00 0 
+7f5af95ca000-7f5af95e5000 r-xp 00000000 08:01 1059093                    /home/rchatsiri/workspacejava/jdk1.8.0_151/jre/lib/amd64/libzip.so
+7f5af95e5000-7f5af97e5000 ---p 0001b000 08:01 1059093                    /home/rchatsiri/workspacejava/jdk1.8.0_151/jre/lib/amd64/libzip.so
+7f5af97e5000-7f5af97e6000 rw-p 0001b000 08:01 1059093                    /home/rchatsiri/workspacejava/jdk1.8.0_151/jre/lib/amd64/libzip.so
+7f5af97e6000-7f5af97f0000 r-xp 00000000 08:01 522258                     /lib/x86_64-linux-gnu/libnss_files-2.24.so
+7f5af97f0000-7f5af99f0000 ---p 0000a000 08:01 522258                     /lib/x86_64-linux-gnu/libnss_files-2.24.so
+7f5af99f0000-7f5af99f1000 r--p 0000a000 08:01 522258                     /lib/x86_64-linux-gnu/libnss_files-2.24.so
+7f5af99f1000-7f5af99f2000 rw-p 0000b000 08:01 522258                     /lib/x86_64-linux-gnu/libnss_files-2.24.so
+7f5af99f2000-7f5af99f8000 rw-p 00000000 00:00 0 
+7f5af99f8000-7f5af9a03000 r-xp 00000000 08:01 522260                     /lib/x86_64-linux-gnu/libnss_nis-2.24.so
+7f5af9a03000-7f5af9c02000 ---p 0000b000 08:01 522260                     /lib/x86_64-linux-gnu/libnss_nis-2.24.so
+7f5af9c02000-7f5af9c03000 r--p 0000a000 08:01 522260                     /lib/x86_64-linux-gnu/libnss_nis-2.24.so
+7f5af9c03000-7f5af9c04000 rw-p 0000b000 08:01 522260                     /lib/x86_64-linux-gnu/libnss_nis-2.24.so
+7f5af9c04000-7f5af9c18000 r-xp 00000000 08:01 522255                     /lib/x86_64-linux-gnu/libnsl-2.24.so
+7f5af9c18000-7f5af9e18000 ---p 00014000 08:01 522255                     /lib/x86_64-linux-gnu/libnsl-2.24.so
+7f5af9e18000-7f5af9e19000 r--p 00014000 08:01 522255                     /lib/x86_64-linux-gnu/libnsl-2.24.so
+7f5af9e19000-7f5af9e1a000 rw-p 00015000 08:01 522255                     /lib/x86_64-linux-gnu/libnsl-2.24.so
+7f5af9e1a000-7f5af9e1c000 rw-p 00000000 00:00 0 
+7f5af9e1c000-7f5af9e23000 r-xp 00000000 08:01 522256                     /lib/x86_64-linux-gnu/libnss_compat-2.24.so
+7f5af9e23000-7f5afa022000 ---p 00007000 08:01 522256                     /lib/x86_64-linux-gnu/libnss_compat-2.24.so
+7f5afa022000-7f5afa023000 r--p 00006000 08:01 522256                     /lib/x86_64-linux-gnu/libnss_compat-2.24.so
+7f5afa023000-7f5afa024000 rw-p 00007000 08:01 522256                     /lib/x86_64-linux-gnu/libnss_compat-2.24.so
+7f5afa024000-7f5afa04f000 r-xp 00000000 08:01 1059087                    /home/rchatsiri/workspacejava/jdk1.8.0_151/jre/lib/amd64/libjava.so
+7f5afa04f000-7f5afa24e000 ---p 0002b000 08:01 1059087                    /home/rchatsiri/workspacejava/jdk1.8.0_151/jre/lib/amd64/libjava.so
+7f5afa24e000-7f5afa250000 rw-p 0002a000 08:01 1059087                    /home/rchatsiri/workspacejava/jdk1.8.0_151/jre/lib/amd64/libjava.so
+7f5afa250000-7f5afa25d000 r-xp 00000000 08:01 1059092                    /home/rchatsiri/workspacejava/jdk1.8.0_151/jre/lib/amd64/libverify.so
+7f5afa25d000-7f5afa45d000 ---p 0000d000 08:01 1059092                    /home/rchatsiri/workspacejava/jdk1.8.0_151/jre/lib/amd64/libverify.so
+7f5afa45d000-7f5afa45f000 rw-p 0000d000 08:01 1059092                    /home/rchatsiri/workspacejava/jdk1.8.0_151/jre/lib/amd64/libverify.so
+7f5afa45f000-7f5afa466000 r-xp 00000000 08:01 522265                     /lib/x86_64-linux-gnu/librt-2.24.so
+7f5afa466000-7f5afa665000 ---p 00007000 08:01 522265                     /lib/x86_64-linux-gnu/librt-2.24.so
+7f5afa665000-7f5afa666000 r--p 00006000 08:01 522265                     /lib/x86_64-linux-gnu/librt-2.24.so
+7f5afa666000-7f5afa667000 rw-p 00007000 08:01 522265                     /lib/x86_64-linux-gnu/librt-2.24.so
+7f5afa667000-7f5afa76a000 r-xp 00000000 08:01 522252                     /lib/x86_64-linux-gnu/libm-2.24.so
+7f5afa76a000-7f5afa969000 ---p 00103000 08:01 522252                     /lib/x86_64-linux-gnu/libm-2.24.so
+7f5afa969000-7f5afa96a000 r--p 00102000 08:01 522252                     /lib/x86_64-linux-gnu/libm-2.24.so
+7f5afa96a000-7f5afa96b000 rw-p 00103000 08:01 522252                     /lib/x86_64-linux-gnu/libm-2.24.so
+7f5afa96b000-7f5afb63e000 r-xp 00000000 08:01 1059070                    /home/rchatsiri/workspacejava/jdk1.8.0_151/jre/lib/amd64/server/libjvm.so
+7f5afb63e000-7f5afb83d000 ---p 00cd3000 08:01 1059070                    /home/rchatsiri/workspacejava/jdk1.8.0_151/jre/lib/amd64/server/libjvm.so
+7f5afb83d000-7f5afb917000 rw-p 00cd2000 08:01 1059070                    /home/rchatsiri/workspacejava/jdk1.8.0_151/jre/lib/amd64/server/libjvm.so
+7f5afb917000-7f5afb962000 rw-p 00000000 00:00 0 
+7f5afb962000-7f5afbaf7000 r-xp 00000000 08:01 522248                     /lib/x86_64-linux-gnu/libc-2.24.so
+7f5afbaf7000-7f5afbcf7000 ---p 00195000 08:01 522248                     /lib/x86_64-linux-gnu/libc-2.24.so
+7f5afbcf7000-7f5afbcfb000 r--p 00195000 08:01 522248                     /lib/x86_64-linux-gnu/libc-2.24.so
+7f5afbcfb000-7f5afbcfd000 rw-p 00199000 08:01 522248                     /lib/x86_64-linux-gnu/libc-2.24.so
+7f5afbcfd000-7f5afbd01000 rw-p 00000000 00:00 0 
+7f5afbd01000-7f5afbd04000 r-xp 00000000 08:01 522251                     /lib/x86_64-linux-gnu/libdl-2.24.so
+7f5afbd04000-7f5afbf03000 ---p 00003000 08:01 522251                     /lib/x86_64-linux-gnu/libdl-2.24.so
+7f5afbf03000-7f5afbf04000 r--p 00002000 08:01 522251                     /lib/x86_64-linux-gnu/libdl-2.24.so
+7f5afbf04000-7f5afbf05000 rw-p 00003000 08:01 522251                     /lib/x86_64-linux-gnu/libdl-2.24.so
+7f5afbf05000-7f5afbf1b000 r-xp 00000000 08:01 666662                     /home/rchatsiri/workspacejava/jdk1.8.0_151/lib/amd64/jli/libjli.so
+7f5afbf1b000-7f5afc11a000 ---p 00016000 08:01 666662                     /home/rchatsiri/workspacejava/jdk1.8.0_151/lib/amd64/jli/libjli.so
+7f5afc11a000-7f5afc11b000 rw-p 00015000 08:01 666662                     /home/rchatsiri/workspacejava/jdk1.8.0_151/lib/amd64/jli/libjli.so
+7f5afc11b000-7f5afc133000 r-xp 00000000 08:01 522263                     /lib/x86_64-linux-gnu/libpthread-2.24.so
+7f5afc133000-7f5afc332000 ---p 00018000 08:01 522263                     /lib/x86_64-linux-gnu/libpthread-2.24.so
+7f5afc332000-7f5afc333000 r--p 00017000 08:01 522263                     /lib/x86_64-linux-gnu/libpthread-2.24.so
+7f5afc333000-7f5afc334000 rw-p 00018000 08:01 522263                     /lib/x86_64-linux-gnu/libpthread-2.24.so
+7f5afc334000-7f5afc338000 rw-p 00000000 00:00 0 
+7f5afc338000-7f5afc35b000 r-xp 00000000 08:01 522243                     /lib/x86_64-linux-gnu/ld-2.24.so
+7f5afc35b000-7f5afc44b000 rw-p 00000000 00:00 0 
+7f5afc44b000-7f5afc44e000 ---p 00000000 00:00 0 
+7f5afc44e000-7f5afc54e000 rw-p 00000000 00:00 0 
+7f5afc54e000-7f5afc556000 rw-s 00000000 08:01 938706                     /tmp/hsperfdata_rchatsiri/12721
+7f5afc556000-7f5afc557000 rw-p 00000000 00:00 0 
+7f5afc557000-7f5afc558000 r--p 00000000 00:00 0 
+7f5afc558000-7f5afc55b000 rw-p 00000000 00:00 0 
+7f5afc55b000-7f5afc55c000 r--p 00023000 08:01 522243                     /lib/x86_64-linux-gnu/ld-2.24.so
+7f5afc55c000-7f5afc55d000 rw-p 00024000 08:01 522243                     /lib/x86_64-linux-gnu/ld-2.24.so
+7f5afc55d000-7f5afc55e000 rw-p 00000000 00:00 0 
+7ffeeed18000-7ffeeed39000 rw-p 00000000 00:00 0                          [stack]
+7ffeeedaa000-7ffeeedac000 r--p 00000000 00:00 0                          [vvar]
+7ffeeedac000-7ffeeedae000 r-xp 00000000 00:00 0                          [vdso]
+ffffffffff600000-ffffffffff601000 r-xp 00000000 00:00 0                  [vsyscall]
+
+VM Arguments:
+jvm_args: -Xms8192m -Xmx8192m -XX:ReservedCodeCacheSize=512m -XX:MaxMetaspaceSize=512m -XX:+UseConcMarkSweepGC -XX:+CMSClassUnloadingEnabled -XX:+CMSParallelRemarkEnabled -XX:+UseCMSInitiatingOccupancyOnly -XX:+ScavengeBeforeFullGC -XX:+CMSScavengeBeforeRemark -XX:+ScavengeBeforeFullGC -XX:+CMSScavengeBeforeRemark -XX:SoftRefLRUPolicyMSPerMB=50 -XX:CMSInitiatingOccupancyFraction=70 -XX:-OmitStackTraceInFastThrow -XX:+AggressiveOpts 
+java_command: /home/rchatsiri/workspacescala/3rdlibraries/sbt/bin/sbt-launch.jar --mem 2048 ensimeConfig
+java_class_path (initial): /home/rchatsiri/workspacescala/3rdlibraries/sbt/bin/sbt-launch.jar
+Launcher Type: SUN_STANDARD
+
+Environment Variables:
+PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/games:/usr/games:/home/rchatsiri/workspacescala/3rdlibraries/sbt/bin
+SHELL=/bin/bash
+
+Signal Handlers:
+SIGSEGV: [libjvm.so+0xacbe10], sa_mask[0]=11111111011111111101111111111110, sa_flags=SA_RESTART|SA_SIGINFO
+SIGBUS: [libjvm.so+0xacbe10], sa_mask[0]=11111111011111111101111111111110, sa_flags=SA_RESTART|SA_SIGINFO
+SIGFPE: [libjvm.so+0x924f90], sa_mask[0]=11111111011111111101111111111110, sa_flags=SA_RESTART|SA_SIGINFO
+SIGPIPE: [libjvm.so+0x924f90], sa_mask[0]=11111111011111111101111111111110, sa_flags=SA_RESTART|SA_SIGINFO
+SIGXFSZ: [libjvm.so+0x924f90], sa_mask[0]=11111111011111111101111111111110, sa_flags=SA_RESTART|SA_SIGINFO
+SIGILL: [libjvm.so+0x924f90], sa_mask[0]=11111111011111111101111111111110, sa_flags=SA_RESTART|SA_SIGINFO
+SIGUSR1: SIG_DFL, sa_mask[0]=00000000000000000000000000000000, sa_flags=none
+SIGUSR2: [libjvm.so+0x9267d0], sa_mask[0]=00000000000000000000000000000000, sa_flags=SA_RESTART|SA_SIGINFO
+SIGHUP: SIG_DFL, sa_mask[0]=00000000000000000000000000000000, sa_flags=none
+SIGINT: SIG_DFL, sa_mask[0]=00000000000000000000000000000000, sa_flags=none
+SIGTERM: SIG_DFL, sa_mask[0]=00000000000000000000000000000000, sa_flags=none
+SIGQUIT: SIG_DFL, sa_mask[0]=00000000000000000000000000000000, sa_flags=none
+
+
+---------------  S Y S T E M  ---------------
+
+OS:PRETTY_NAME="Debian GNU/Linux 9 (stretch)"
+NAME="Debian GNU/Linux"
+VERSION_ID="9"
+VERSION="9 (stretch)"
+ID=debian
+HOME_URL="https://www.debian.org/"
+SUPPORT_URL="https://www.debian.org/support"
+BUG_REPORT_URL="https://bugs.debian.org/"
+
+uname:Linux 4.9.0-4-amd64 #1 SMP Debian 4.9.65-3 (2017-12-03) x86_64
+libc:glibc 2.24 NPTL 2.24 
+rlimit: STACK 8192k, CORE 0k, NPROC 15616, NOFILE 1048576, AS infinity
+load average:0.00 0.14 0.38
+
+/proc/meminfo:
+MemTotal:        4020000 kB
+MemFree:          805808 kB
+MemAvailable:     719912 kB
+Buffers:            5472 kB
+Cached:            84248 kB
+SwapCached:          524 kB
+Active:            38928 kB
+Inactive:          59040 kB
+Active(anon):       8252 kB
+Inactive(anon):    40220 kB
+Active(file):      30676 kB
+Inactive(file):    18820 kB
+Unevictable:           0 kB
+Mlocked:               0 kB
+SwapTotal:       4178940 kB
+SwapFree:        4135824 kB
+Dirty:               164 kB
+Writeback:             0 kB
+AnonPages:          8100 kB
+Mapped:            14684 kB
+Shmem:             40224 kB
+Slab:              27996 kB
+SReclaimable:      12712 kB
+SUnreclaim:        15284 kB
+KernelStack:        3536 kB
+PageTables:         2692 kB
+NFS_Unstable:          0 kB
+Bounce:                0 kB
+WritebackTmp:          0 kB
+CommitLimit:     6188940 kB
+Committed_AS:     340888 kB
+VmallocTotal:   34359738367 kB
+VmallocUsed:           0 kB
+VmallocChunk:          0 kB
+HardwareCorrupted:     0 kB
+AnonHugePages:         0 kB
+ShmemHugePages:        0 kB
+ShmemPmdMapped:        0 kB
+HugePages_Total:       0
+HugePages_Free:        0
+HugePages_Rsvd:        0
+HugePages_Surp:        0
+Hugepagesize:       2048 kB
+DirectMap4k:       55232 kB
+DirectMap2M:     5175296 kB
+DirectMap1G:     1048576 kB
+
+
+CPU:total 2 (initial active 2) (2 cores per cpu, 1 threads per core) family 6 model 142 stepping 9, cmov, cx8, fxsr, mmx, sse, sse2, sse3, ssse3, sse4.1, sse4.2, popcnt, avx, avx2, aes, clmul, erms, 3dnowpref, lzcnt, tsc, bmi1, bmi2, adx
+
+/proc/cpuinfo:
+processor	: 0
+vendor_id	: GenuineIntel
+cpu family	: 6
+model		: 142
+model name	: Intel(R) Core(TM) i5-7200U CPU @ 2.50GHz
+stepping	: 9
+microcode	: 0xffffffff
+cpu MHz		: 2711.998
+cache size	: 3072 KB
+physical id	: 0
+siblings	: 2
+core id		: 0
+cpu cores	: 2
+apicid		: 0
+initial apicid	: 0
+fpu		: yes
+fpu_exception	: yes
+cpuid level	: 21
+wp		: yes
+flags		: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ss ht syscall nx pdpe1gb rdtscp lm constant_tsc rep_good nopl xtopology eagerfpu pni pclmulqdq ssse3 fma cx16 pcid sse4_1 sse4_2 movbe popcnt aes xsave avx f16c rdrand hypervisor lahf_lm abm 3dnowprefetch fsgsbase bmi1 avx2 smep bmi2 erms invpcid mpx rdseed adx smap clflushopt xsaveopt xsavec xgetbv1 xsaves
+bugs		:
+bogomips	: 5423.99
+clflush size	: 64
+cache_alignment	: 64
+address sizes	: 39 bits physical, 48 bits virtual
+power management:
+
+processor	: 1
+vendor_id	: GenuineIntel
+cpu family	: 6
+model		: 142
+model name	: Intel(R) Core(TM) i5-7200U CPU @ 2.50GHz
+stepping	: 9
+microcode	: 0xffffffff
+cpu MHz		: 2711.998
+cache size	: 3072 KB
+physical id	: 0
+siblings	: 2
+core id		: 1
+cpu cores	: 2
+apicid		: 1
+initial apicid	: 1
+fpu		: yes
+fpu_exception	: yes
+cpuid level	: 21
+wp		: yes
+flags		: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ss ht syscall nx pdpe1gb rdtscp lm constant_tsc rep_good nopl xtopology eagerfpu pni pclmulqdq ssse3 fma cx16 pcid sse4_1 sse4_2 movbe popcnt aes xsave avx f16c rdrand hypervisor lahf_lm abm 3dnowprefetch fsgsbase bmi1 avx2 smep bmi2 erms invpcid mpx rdseed adx smap clflushopt xsaveopt xsavec xgetbv1 xsaves
+bugs		:
+bogomips	: 5423.99
+clflush size	: 64
+cache_alignment	: 64
+address sizes	: 39 bits physical, 48 bits virtual
+power management:
+
+
+
+Memory: 4k page, physical 4020000k(805808k free), swap 4178940k(4135824k free)
+
+vm_info: Java HotSpot(TM) 64-Bit Server VM (25.151-b12) for linux-amd64 JRE (1.8.0_151-b12), built on Sep  5 2017 19:20:58 by "java_re" with gcc 4.3.0 20080428 (Red Hat 4.3.0-8)
+
+time: Thu Jan 11 13:00:11 2018
+elapsed time: 0 seconds (0d 0h 0m 0s)
+
