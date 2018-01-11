@@ -374,3 +374,15 @@ and <a href="https://www.yourkit.com/.net/profiler/index.jsp">YourKit
 .NET Profiler</a>,
 innovative and intelligent tools for profiling Java and .NET
 applications.
+
+## Developer notes.
+
+* Resource
+ 
+   * Gits
+
+      * Graph with log : ``` git log --all --decorate --oneline --graph ```
+
+   * Editor concept.
+
+      *  [Setting IDE.](https://www.47deg.com/blog/scala-development-with-emacs/)
